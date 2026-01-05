@@ -1,0 +1,3 @@
+[submodule "ircd"]
+	path = ircd
+	url = https://github.com/zalyssa/ircd.git
