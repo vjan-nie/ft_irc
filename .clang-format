@@ -1,0 +1,37 @@
+# ft_irc style — matches the existing hand-written code:
+#   tabs for indentation, Allman braces, pointer glued to the name,
+#   and NO automatic line wrapping (manual line breaks are preserved).
+Language:        Cpp
+Standard:        c++03
+BasedOnStyle:    LLVM
+
+# Indentation
+UseTab:          ForIndentation
+TabWidth:        4
+IndentWidth:     4
+ContinuationIndentWidth: 4
+AccessModifierOffset: -4
+NamespaceIndentation: None
+
+# Preserve the existing "# define" / "# include" convention inside guards
+IndentPPDirectives: AfterHash
+
+# Keep the column-aligned declarations the headers already use
+AlignConsecutiveDeclarations: true
+
+# Braces — Allman (opening brace on its own line)
+BreakBeforeBraces: Allman
+
+# Pointers/references glued to the identifier:  Client *c;
+PointerAlignment: Right
+DerivePointerAlignment: false
+
+# Preserve manual formatting: no reflow, no forced wrapping
+ColumnLimit:     0
+ReflowComments:  false
+SortIncludes:    false
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+SpaceBeforeParens: ControlStatements
