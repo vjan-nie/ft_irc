@@ -170,7 +170,11 @@ class TestReport {
   static TestReport& instance();
 
   void  snapshotMemory();
-  void  assertNoLeaks(const std::string& label);
+  /** Takes const char* so the call itself allocates nothing before the
+   *  comparison — a std::string argument would count as a "leak". */
+  void  assertNoLeaks(const char* label);
+  /** Allocations outstanding since snapshotMemory() (may be negative). */
+  int   leakDelta() const;
   /**
    * @brief Begin a new test suite.
    *

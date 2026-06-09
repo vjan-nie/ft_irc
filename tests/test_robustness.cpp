@@ -367,6 +367,24 @@ TEST_F(RobustnessTest, NoZombieProcesses)
 
 TEST_F(RobustnessTest, NoLeakAfterClientChurn)
 {
+	/* One warm-up cycle BEFORE the snapshot: the first client ever handled
+	 * by this fresh server thread triggers one-time lazy initialisation
+	 * (locale facets, per-thread runtime structures) that would otherwise
+	 * read as a phantom "leak". The test's purpose is per-client balance. */
+	{
+		int fd = quickConnect(serverPort);
+		ASSERT_GE(fd, 0);
+		sendLine(fd, "PASS robpass");
+		sendLine(fd, "NICK leakwarm");
+		sendLine(fd, "USER leakwarm 0 * :T");
+		std::this_thread::sleep_for(std::chrono::milliseconds(150));
+		recvBuf(fd);
+		sendLine(fd, "QUIT :bye");
+		std::this_thread::sleep_for(std::chrono::milliseconds(150));
+		close(fd);
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	}
+
 	TestReport::instance().snapshotMemory();
 
 	/* Ten connect-register-quit cycles */
@@ -383,7 +401,13 @@ TEST_F(RobustnessTest, NoLeakAfterClientChurn)
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 		close(fd);
 	}
-	std::this_thread::sleep_for(std::chrono::milliseconds(400));
+
+	/* The server thread releases each Client asynchronously — poll the
+	 * allocation balance instead of racing it with a fixed sleep. */
+	for (int waited = 0;
+		 TestReport::instance().leakDelta() != 0 && waited < 3000;
+		 waited += 50)
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
 	ASSERT_NO_LEAKS("client churn should not leak memory");
 }

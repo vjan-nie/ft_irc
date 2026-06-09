@@ -7,3 +7,6 @@
 [submodule "vendor/libcpp"]
 	path = vendor/libcpp
 	url = git@github.com:Univers42/libcpp.git
+[submodule "vendor/scripts"]
+	path = vendor/scripts
+	url = git@github.com:Univers42/scripts.git

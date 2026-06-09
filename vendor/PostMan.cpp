@@ -11,6 +11,7 @@
 /* ************************************************************************** */
 
 #include "PostMan.hpp"
+#include <atomic>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -33,7 +34,10 @@
 #define JLl "\xe2\x94\x9c"
 #define JRl "\xe2\x94\xa4"
 
-int g_allocations = 0;
+/* Atomic: the tests run a live server in a background thread, so new/delete
+ * fire concurrently — a plain int loses increments and reports phantom
+ * "leaks" of 2-3 allocations. */
+std::atomic<int> g_allocations(0);
 
 void* operator new(std::size_t size) {
   void* ptr = std::malloc(size);
@@ -85,13 +89,19 @@ void  TestReport::snapshotMemory() {
   _allocSnapshot = g_allocations;
 }
 
-void  TestReport::assertNoLeaks(const std::string& label) {
-  bool  ok = (g_allocations == _allocSnapshot);
+int   TestReport::leakDelta() const {
+  return g_allocations - _allocSnapshot;
+}
+
+void  TestReport::assertNoLeaks(const char* label) {
+  /* Capture the delta BEFORE anything in this call can allocate (record()
+   * and the stream output below both do). */
+  const int delta = g_allocations - _allocSnapshot;
+  const bool ok = (delta == 0);
   record(label, ok);
   if (!ok) {
-    std::cerr << PM_FAIL << PM_BOLD << "  [FAIL]" << PM_RST
-              << label << "(leaked)" << (g_allocations - _allocSnapshot)
-              << " Allocations)\n";
+    std::cerr << PM_FAIL << PM_BOLD << "  [FAIL] " << PM_RST
+              << label << " (leaked " << delta << " allocations)\n";
   } else {
     std::cout << PM_PASS << PM_BOLD << "  [PASS] " << PM_RST << label << "\n";
   }
