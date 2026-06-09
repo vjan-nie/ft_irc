@@ -204,12 +204,15 @@ void Server::modifyEpoll(int fd, uint32_t events)
 	std::memset(&ev, 0, sizeof(ev));
 	ev.events = events;
 	ev.data.fd = fd;
-	epoll_ctl(_epollFd, EPOLL_CTL_MOD, fd, &ev);
+	if (epoll_ctl(_epollFd, EPOLL_CTL_MOD, fd, &ev) < 0)
+		Log::error(std::string("epoll_ctl MOD failed: ") + strerror(errno));
 }
 
 void Server::removeFromEpoll(int fd)
 {
-	epoll_ctl(_epollFd, EPOLL_CTL_DEL, fd, NULL);
+	if (epoll_ctl(_epollFd, EPOLL_CTL_DEL, fd, NULL) < 0
+		&& errno != ENOENT && errno != EBADF)
+		Log::error(std::string("epoll_ctl DEL failed: ") + strerror(errno));
 }
 
 /* ─── Main event loop ─── */
@@ -288,6 +291,16 @@ void Server::acceptClient()
 		return;
 	}
 
+	// Connection cap: reject gracefully instead of exhausting fds
+	if (_clients.size() >= MAX_CLIENTS)
+	{
+		const char rejection[] = "ERROR :Server full\r\n";
+		send(clientFd, rejection, sizeof(rejection) - 1, 0); // best effort
+		close(clientFd);
+		Log::warn("connection rejected: MAX_CLIENTS reached");
+		return;
+	}
+
 	// Set non-blocking
 	if (fcntl(clientFd, F_SETFL, O_NONBLOCK) < 0)
 	{
@@ -345,6 +358,10 @@ void Server::handleClientInput(int fd)
 		if (_clients.find(fd) == _clients.end())
 			return;
 	}
+
+	// SendQ sweep: never disconnect mid-broadcast, only between events
+	if (client->isSendQExceeded())
+		disconnectClient(fd, "SendQ exceeded");
 }
 
 void Server::handleClientOutput(int fd)
@@ -365,6 +382,11 @@ void Server::handleClientOutput(int fd)
 		return;
 	}
 	client->clearSendBuffer(bytesSent);
+
+	// SendQ sweep: the peer is too slow / flooded; its stream already
+	// lost messages, so terminate it cleanly.
+	if (client->isSendQExceeded())
+		disconnectClient(fd, "SendQ exceeded");
 }
 
 void Server::handleMessage(Client *client, const std::string &raw)
@@ -390,7 +412,11 @@ void Server::checkTimeouts()
 		Client *client = it->second;
 		time_t idle = now - client->getLastActivity();
 
-		if (client->isPingSent() && idle > PING_INTERVAL + PING_TIMEOUT)
+		if (client->isSendQExceeded())
+		{
+			toDisconnect.push_back(it->first);
+		}
+		else if (client->isPingSent() && idle > PING_INTERVAL + PING_TIMEOUT)
 		{
 			toDisconnect.push_back(it->first);
 		}

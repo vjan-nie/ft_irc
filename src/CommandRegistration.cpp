@@ -5,6 +5,7 @@
 #include "IrcCase.hpp"
 #include "Log.hpp"
 #include "libcpp/str/case.hpp"
+#include "libcpp/str/secure.hpp"
 
 /* ─── CAP ─── */
 
@@ -138,8 +139,9 @@ void Server::cmdUser(Client *client, const Message &msg)
 
 void Server::completeRegistration(Client *client)
 {
-	// Check password
-	if (!client->hasPassSent() || client->getPassword() != _password)
+	// Check password (timing-safe: comparison cost never leaks a prefix)
+	if (!client->hasPassSent()
+		|| !libcpp::str::eq_consttime(client->getPassword(), _password))
 	{
 		sendReply(client, ERR_PASSWDMISMATCH,
 				  ":Password incorrect");

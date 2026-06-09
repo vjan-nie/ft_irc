@@ -49,6 +49,7 @@ public:
 	const std::string			&getSendBuffer() const;
 	void						clearSendBuffer(size_t bytesSent);
 	bool						hasPendingData() const;
+	bool						isSendQExceeded() const;
 
 private:
 	Client();

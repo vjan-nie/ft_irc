@@ -7,6 +7,7 @@
 #include "Channel.hpp"
 #include "IrcCase.hpp"
 #include "Replies.hpp"
+#include "libcpp/str/secure.hpp"
 
 /* Fixture: server in a background thread (see TestHarness.hpp) */
 class SecurityTest : public IrcServerTest
@@ -130,6 +131,56 @@ TEST_F(SecurityTest, NickCollisionIsCaseInsensitive)
 	std::this_thread::sleep_for(std::chrono::milliseconds(200));
 	std::string reply = b.recvAll();
 	EXPECT_TRUE(b.hasNumeric(reply, "433")) << "Expected ERR_NICKNAMEINUSE, got: " << reply;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Suite: SendQ — per-client send-buffer cap
+ * ════════════════════════════════════════════════════════════════════ */
+
+TEST(SendQ, OverflowLatchesAndDropsExcess)
+{
+	Client c(80, "127.0.0.1");
+	EXPECT_FALSE(c.isSendQExceeded());
+
+	/* Queue well past MAX_SENDQ without draining */
+	std::string line(500, 'x');
+	for (int i = 0; i < (MAX_SENDQ / 500) + 10; ++i)
+		c.queueMessage(line);
+
+	EXPECT_TRUE(c.isSendQExceeded());
+	/* The buffer never grows past the cap — excess lines were dropped */
+	EXPECT_LE(c.getSendBuffer().size(), static_cast<size_t>(MAX_SENDQ));
+}
+
+TEST(SendQ, NormalTrafficNeverTrips)
+{
+	Client c(81, "127.0.0.1");
+	for (int i = 0; i < 50; ++i)
+	{
+		c.queueMessage("PRIVMSG #chan :normal message");
+		c.clearSendBuffer(c.getSendBuffer().size()); /* drained by epoll */
+	}
+	EXPECT_FALSE(c.isSendQExceeded());
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Suite: ConstTime — timing-safe password comparison
+ * ════════════════════════════════════════════════════════════════════ */
+
+TEST(ConstTime, TruthTable)
+{
+	using libcpp::str::eq_consttime;
+	EXPECT_TRUE(eq_consttime("", ""));
+	EXPECT_TRUE(eq_consttime("secret", "secret"));
+	EXPECT_FALSE(eq_consttime("secret", "secres"));
+	EXPECT_FALSE(eq_consttime("secret", "Secret"));
+	EXPECT_FALSE(eq_consttime("secret", ""));
+	EXPECT_FALSE(eq_consttime("", "secret"));
+	EXPECT_FALSE(eq_consttime("secret", "secretx"));
+	EXPECT_FALSE(eq_consttime("secretx", "secret"));
+	std::string nul1("a\0b", 3), nul2("a\0c", 3);
+	EXPECT_FALSE(eq_consttime(nul1, nul2));
+	EXPECT_TRUE(eq_consttime(nul1, std::string("a\0b", 3)));
 }
 
 /* ════════════════════════════════════════════════════════════════════════

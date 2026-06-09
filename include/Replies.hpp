@@ -123,6 +123,8 @@
 # define MAX_TARGETS		4
 # define MAX_KEYLEN		23
 # define MAX_USERLIMIT		65535
+# define MAX_SENDQ			(64 * 1024)
+# define MAX_CLIENTS		1024
 # define PING_INTERVAL		120
 # define PING_TIMEOUT		120
 

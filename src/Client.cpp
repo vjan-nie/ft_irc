@@ -11,7 +11,7 @@ Client::Client(int fd, const std::string &hostname)
 	  _passSent(false),
 	  _nickSet(false),
 	  _userSet(false),
-	  _io(MAX_MSGLEN, 0),
+	  _io(MAX_MSGLEN, MAX_SENDQ),
 	  _lastActivity(std::time(NULL)),
 	  _pingSent(false)
 {
@@ -108,4 +108,12 @@ void Client::clearSendBuffer(size_t bytesSent)
 bool Client::hasPendingData() const
 {
 	return _io.hasPending();
+}
+
+/* True once a queued message had to be dropped because the send buffer
+** blew MAX_SENDQ — the server's cue to disconnect this peer (it is either
+** not reading or being flooded; its stream is already incomplete). */
+bool Client::isSendQExceeded() const
+{
+	return _io.overflowed();
 }
