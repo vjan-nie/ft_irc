@@ -1,12 +1,15 @@
 # ─────────────────────────────────────────────────────────────────────────────
-#  Full ft_irc stack: the C++98 server + the Claude-backed Rust companion.
+#  Full ft_irc stack: the C++98 server + the Claude-backed Rust companion,
+#  plus an optional real-time/web tier behind the "platform" profile.
 #
-#    cp .env.example .env     # then set ANTHROPIC_API_KEY
-#    docker compose up --build
+#    cp .env.example .env                       # set ANTHROPIC_API_KEY
+#    docker compose up --build                  # ircserv + ai-assistant
+#    docker compose --profile platform up --build   # + realtime-agnostic + bridge
 #
-#  The companion connects to the server over the compose network (host
-#  "ircserv"), joins $IRC_CHANNELS, and answers when addressed. The server
-#  itself is subject-clean and unaware the companion is AI.
+#  Companions connect to the server over the compose network (host "ircserv")
+#  as ordinary IRC clients; the server itself is subject-clean and unaware of
+#  them. The "platform" tier adds realtime-agnostic (WebSocket pub/sub on :4000)
+#  and a bridge that mirrors IRC ↔ realtime in both directions.
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -37,4 +40,42 @@ services:
       ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-claude-opus-4-8}"
     # The companion has its own 3s reconnect loop, so it tolerates the server
     # not being ready the instant it starts.
+    restart: unless-stopped
+
+  # ── Optional real-time / web tier (docker compose --profile platform up) ──
+  realtime:
+    image: dlesieur/realtime-agnostic:latest
+    profiles: ["platform"]
+    ports:
+      - "${REALTIME_PORT:-4000}:4000"
+    environment:
+      RUST_LOG: "${RUST_LOG:-info}"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4000/v1/health"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+  realtime-bridge:
+    build:
+      context: ./companions/realtime-bridge
+    image: ft_irc/realtime-bridge
+    profiles: ["platform"]
+    depends_on:
+      ircserv:
+        condition: service_started
+      realtime:
+        condition: service_healthy
+    environment:
+      IRC_HOST: ircserv
+      IRC_PORT: "6667"
+      IRC_PASS: "${IRC_SERVER_PASSWORD:-changeme}"
+      IRC_NICK: "${RT_BRIDGE_NICK:-rtbridge}"
+      IRC_CHANNELS: "${IRC_CHANNELS:-#general}"
+      RT_PUBLISH_URL: "http://realtime:4000/v1/publish"
+      RT_WS_URL: "ws://realtime:4000/ws"
+      RT_INBOUND_TOPICS: "${RT_INBOUND_TOPICS:-pg/**,mongo/**,irc-in/**}"
+      RT_DEFAULT_CHANNEL: "${RT_DEFAULT_CHANNEL:-#general}"
     restart: unless-stopped
