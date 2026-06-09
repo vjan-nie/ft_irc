@@ -42,18 +42,30 @@ src_files() {
 		-o -name '*.tpp' -o -name '*.ipp' -o -name '*.h' \) 2>/dev/null
 }
 
-# ── 1. clean compile under the mandated flags ────────────────────────────────
+# ── 1. clean compile under the mandated flags (all three tiers) ──────────────
 section "compile: c++ -std=c++98 -Wall -Wextra -Werror"
 BUILD_LOG="$(mktemp)"
 if make re >"$BUILD_LOG" 2>&1; then
 	if grep -qiE 'warning:' "$BUILD_LOG"; then
 		fail "build emitted warnings"; grep -iE 'warning:' "$BUILD_LOG" | head
 	else
-		pass "clean build, zero warnings"
+		pass "clean build (full), zero warnings"
 	fi
 else
 	fail "build failed"; tail -20 "$BUILD_LOG"
 fi
+for tier in mandatory bonus; do
+	if make "$tier" >"$BUILD_LOG" 2>&1; then
+		if grep -qiE 'warning:' "$BUILD_LOG"; then
+			fail "make $tier emitted warnings"; grep -iE 'warning:' "$BUILD_LOG" | head
+		else
+			pass "clean build ($tier), zero warnings"
+		fi
+	else
+		fail "make $tier failed"; tail -20 "$BUILD_LOG"
+	fi
+done
+make >/dev/null 2>&1   # leave the default (full) binary in place
 
 # ── 2. no C++11+ tokens in build sources ─────────────────────────────────────
 section "C++98 compliance (no C++11+ constructs)"
@@ -120,7 +132,7 @@ fi
 
 # ── 6. Makefile required rules ───────────────────────────────────────────────
 section "Makefile rules"
-for rule in 'all' 'clean' 'fclean' 're'; do
+for rule in 'all' 'bonus' 'mandatory' 'clean' 'fclean' 're'; do
 	if grep -qE "^${rule}[[:space:]]*:" Makefile; then
 		pass "rule '$rule' present"
 	else
