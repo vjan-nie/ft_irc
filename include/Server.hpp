@@ -114,9 +114,6 @@ private:
 	bool	isValidChannelName(const std::string &name) const;
 	void	broadcastToChannels(Client *client, const std::string &msg);
 
-	/* ─── Platform features (optional, config-gated) ─── */
-	void	setupPlatformFeatures();
-
 	/* ─── Data ─── */
 	int							_port;
 	std::string					_password;

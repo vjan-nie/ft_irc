@@ -31,6 +31,7 @@ LIBCPP98_SRCS	= $(LIBCPP)/c98/src/line_buffer.cpp \
 				  $(LIBCPP)/c98/src/buffered_socket.cpp
 
 SRCS		= $(SRCDIR)/main.cpp \
+			  $(SRCDIR)/tiers/tier_full.cpp \
 			  $(SRCDIR)/Server.cpp \
 			  $(SRCDIR)/Log.cpp \
 			  $(SRCDIR)/extras/FancyLogSink.cpp \

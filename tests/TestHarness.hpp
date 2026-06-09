@@ -11,6 +11,7 @@
 
 #include <gtest/gtest.h>
 #include "Server.hpp"
+#include "ext/RegisterExtensions.hpp"
 
 #include <thread>
 #include <chrono>
@@ -149,6 +150,9 @@ protected:
 			catch (...) { continue; }
 		}
 		ASSERT_NE(server, nullptr) << "Could not bind to any port";
+
+		/* Tests link the full tier's registration TU */
+		registerExtensions(*server);
 
 		/* Run server in a background thread */
 		serverThread = std::thread([this]() {

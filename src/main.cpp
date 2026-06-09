@@ -1,5 +1,6 @@
 #include "Server.hpp"
 #include "Log.hpp"
+#include "ext/RegisterExtensions.hpp"
 
 #include <iostream>
 #include <cstdlib>
@@ -62,6 +63,7 @@ int main(int argc, char **argv)
 	try
 	{
 		Server server(port, password);
+		registerExtensions(server); /* which set depends on the build tier */
 		server.run();
 	}
 	catch (const std::exception &e)

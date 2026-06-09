@@ -37,7 +37,8 @@ LIBCPP98_SRCS	= $(LIBCPP)/c98/src/line_buffer.cpp \
 				  $(LIBCPP)/c98/src/buffered_socket.cpp
 
 # ── Project sources (everything except main.cpp) ──────────────
-PROJ_SRCS	= ../src/Server.cpp \
+PROJ_SRCS	= ../src/tiers/tier_full.cpp \
+			  ../src/Server.cpp \
 			  ../src/Log.cpp \
 			  ../src/extras/FancyLogSink.cpp \
 			  ../src/PlatformBus.cpp \

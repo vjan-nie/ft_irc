@@ -1,12 +1,8 @@
 #include "Server.hpp"
 #include "IrcCase.hpp"
-#include "Bot.hpp"
 #include "Log.hpp"
-#include "PlatformBus.hpp"
-#include "AuditLog.hpp"
 #include "ext/IServerExtension.hpp"
 #include "libcpp/str/format.hpp"
-#include "libcpp/util/config.hpp"
 
 #include <iostream>
 #include <cstring>
@@ -36,86 +32,6 @@ Server::Server(int port, const std::string &password)
 	createListenSocket();
 	createEpoll();
 	addToEpoll(_listenFd, EPOLLIN);
-	try
-	{
-		addExtension(new Bot(this)); /* temporary: moves to tier TU */
-	}
-	catch (const std::bad_alloc &)
-	{
-		Log::warn("could not create bot (out of memory)");
-	}
-	Log::banner("ft_irc - listening on port " + libcpp::str::to_string(_port));
-	setupPlatformFeatures();
-}
-
-/*
-** Optional real-time platform features. Enabled only when the env var
-** FT_IRC_CONFIG points to an INI file. Without it, ircserv is the plain RFC
-** server the subject grades.
-**
-**   [bus]
-**   enabled = true
-**   port    = 6700
-**   secret  = change-me
-**   nick    = platform
-**
-**   [audit]
-**   enabled = true
-**   path    = ./ircserv-audit.csv
-*/
-void Server::setupPlatformFeatures()
-{
-	const char *cfgPath = std::getenv("FT_IRC_CONFIG");
-	if (!cfgPath)
-		return;
-
-	libcpp::util::Config cfg;
-	if (!cfg.load_file(cfgPath))
-	{
-		Log::warn(std::string("could not read FT_IRC_CONFIG: ") + cfgPath);
-		return;
-	}
-
-	if (cfg.get_bool("audit", "enabled", false))
-	{
-		std::string path = cfg.get("audit", "path", "./ircserv-audit.csv");
-		AuditLog *auditExt = NULL;
-		try
-		{
-			auditExt = new AuditLog(path);
-		}
-		catch (const std::bad_alloc &)
-		{
-			auditExt = NULL;
-		}
-		if (auditExt && !auditExt->ok())
-		{
-			Log::warn("could not open audit log: " + path);
-			delete auditExt;
-		}
-		else if (auditExt)
-		{
-			addExtension(auditExt);
-			Log::info("audit log: " + path);
-		}
-	}
-
-	if (cfg.get_bool("bus", "enabled", false))
-	{
-		int port = cfg.get_int("bus", "port", 6700);
-		std::string secret = cfg.get("bus", "secret", "");
-		std::string nick = cfg.get("bus", "nick", "platform");
-
-		try
-		{
-			/* listens lazily via onServerStart, once run() begins */
-			addExtension(new PlatformBus(this, port, secret, nick));
-		}
-		catch (const std::bad_alloc &)
-		{
-			Log::warn("could not create platform bus (out of memory)");
-		}
-	}
 }
 
 void Server::audit(const std::string &event, const std::string &actor,
@@ -241,6 +157,8 @@ void Server::removeFromEpoll(int fd)
 void Server::run()
 {
 	struct epoll_event events[MAX_EVENTS];
+
+	Log::banner("ft_irc - listening on port " + libcpp::str::to_string(_port));
 
 	for (size_t i = 0; i < _extensions.size(); ++i)
 		_extensions[i]->onServerStart(*this);
