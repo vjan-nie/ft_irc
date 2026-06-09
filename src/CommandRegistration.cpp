@@ -4,6 +4,7 @@
 #include "Bot.hpp"
 #include "IrcCase.hpp"
 #include "Log.hpp"
+#include "ext/IServerExtension.hpp"
 #include "libcpp/str/case.hpp"
 #include "libcpp/str/secure.hpp"
 
@@ -83,6 +84,17 @@ void Server::cmdNick(Client *client, const Message &msg)
 		sendReply(client, ERR_NICKNAMEINUSE,
 				  nick + " :Nickname is already in use");
 		return;
+	}
+
+	// Reject nicks reserved by extensions (virtual participants)
+	for (size_t i = 0; i < _extensions.size(); ++i)
+	{
+		if (_extensions[i]->reservesNick(nick))
+		{
+			sendReply(client, ERR_NICKNAMEINUSE,
+					  nick + " :Nickname is already in use");
+			return;
+		}
 	}
 
 	if (client->isRegistered())
@@ -186,4 +198,7 @@ void Server::completeRegistration(Client *client)
 	Log::success("registered " + nick + " ("
 			  + client->getUsername() + "@" + client->getHostname() + ")");
 	audit("register", nick, client->getUsername() + "@" + client->getHostname());
+
+	for (size_t i = 0; i < _extensions.size(); ++i)
+		_extensions[i]->onClientRegistered(*this, *client);
 }

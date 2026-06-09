@@ -14,6 +14,7 @@
 class Bot;
 class PlatformBus;
 class AuditLog;
+class IServerExtension;
 
 class Server
 {
@@ -45,9 +46,16 @@ public:
 	void	sendReply(Client *client, const std::string &numeric,
 					const std::string &params);
 
-	/* ─── Audit hook (no-op unless [audit] is enabled in config) ─── */
+	/* ─── Audit hook (fans out to extensions; no-op when none listen) ─── */
 	void	audit(const std::string &event, const std::string &actor,
 				const std::string &detail);
+
+	/* ─── Extension seam ─── */
+	/* Server takes ownership; extensions are deleted in reverse order. */
+	void	addExtension(IServerExtension *ext);
+	/* Lets an extension multiplex its own fds into the single epoll. */
+	bool	registerExternalFd(int fd, uint32_t events);
+	void	unregisterExternalFd(int fd);
 
 	/* ─── Static ─── */
 	static bool	isRunning;
@@ -70,6 +78,7 @@ private:
 	void	handleClientOutput(int fd);
 	void	handleMessage(Client *client, const std::string &raw);
 	void	checkTimeouts();
+	bool	dispatchExtensionFd(int fd, uint32_t events);
 
 	/* ─── Command dispatch ─── */
 	void	dispatchCommand(Client *client, const Message &msg);
@@ -125,6 +134,7 @@ private:
 	Bot							*_bot;
 	PlatformBus					*_bus;
 	AuditLog					*_audit;
+	std::vector<IServerExtension *>	_extensions;
 	time_t						_lastPingCheck;
 
 	static const int			MAX_EVENTS = 64;

@@ -3,6 +3,7 @@
 #include "Server.hpp"
 #include "Bot.hpp"
 #include "IrcCase.hpp"
+#include "ext/IServerExtension.hpp"
 
 #include <sstream>
 #include <iostream>
@@ -57,6 +58,13 @@ void Server::cmdPrivmsg(Client *client, const Message &msg)
 		}
 		else
 		{
+			// A virtual participant (bot, service) may claim this target
+			bool handled = false;
+			for (size_t k = 0; k < _extensions.size() && !handled; ++k)
+				handled = _extensions[k]->onPrivmsg(*this, *client, target, text);
+			if (handled)
+				continue;
+
 			// Check if it's the bot
 			if (_bot && ircEquals(target, _bot->getNickname()))
 			{

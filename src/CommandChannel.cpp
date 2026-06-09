@@ -1,6 +1,7 @@
 /* ─── Channel commands: JOIN, PART ─── */
 
 #include "Server.hpp"
+#include "ext/IServerExtension.hpp"
 #include "libcpp/str/format.hpp"
 
 #include <sstream>
@@ -99,6 +100,8 @@ void Server::cmdJoin(Client *client, const Message &msg)
 		chan->broadcastMessage(":" + client->getPrefix()
 							  + " JOIN " + name, NULL);
 		audit("join", client->getNickname(), name);
+		for (size_t k = 0; k < _extensions.size(); ++k)
+			_extensions[k]->onJoin(*this, *client, *chan);
 
 		// Send topic
 		if (!chan->getTopic().empty())
@@ -168,6 +171,8 @@ void Server::cmdPart(Client *client, const Message &msg)
 
 		chan->broadcastMessage(partMsg, NULL);
 		audit("part", client->getNickname(), chanName);
+		for (size_t k = 0; k < _extensions.size(); ++k)
+			_extensions[k]->onPart(*this, *client, *chan);
 		chan->removeMember(client);
 
 		if (chan->isEmpty())

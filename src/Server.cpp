@@ -4,6 +4,7 @@
 #include "Log.hpp"
 #include "PlatformBus.hpp"
 #include "AuditLog.hpp"
+#include "ext/IServerExtension.hpp"
 #include "libcpp/str/format.hpp"
 #include "libcpp/util/config.hpp"
 
@@ -128,10 +129,41 @@ void Server::audit(const std::string &event, const std::string &actor,
 {
 	if (_audit)
 		_audit->log(event, actor, detail);
+	for (size_t i = 0; i < _extensions.size(); ++i)
+		_extensions[i]->onAudit(event, actor, detail);
+}
+
+/* ─── Extension seam ─── */
+
+void Server::addExtension(IServerExtension *ext)
+{
+	if (ext)
+		_extensions.push_back(ext);
+}
+
+bool Server::registerExternalFd(int fd, uint32_t events)
+{
+	try
+	{
+		addToEpoll(fd, events);
+	}
+	catch (const std::exception &)
+	{
+		return false;
+	}
+	return true;
+}
+
+void Server::unregisterExternalFd(int fd)
+{
+	removeFromEpoll(fd);
 }
 
 Server::~Server()
 {
+	for (std::vector<IServerExtension *>::reverse_iterator it =
+			 _extensions.rbegin(); it != _extensions.rend(); ++it)
+		delete *it;
 	delete _audit;
 	delete _bus;
 	delete _bot;
@@ -221,6 +253,9 @@ void Server::run()
 {
 	struct epoll_event events[MAX_EVENTS];
 
+	for (size_t i = 0; i < _extensions.size(); ++i)
+		_extensions[i]->onServerStart(*this);
+
 	while (isRunning)
 	{
 		int nfds = epoll_wait(_epollFd, events, MAX_EVENTS, 1000);
@@ -251,6 +286,10 @@ void Server::run()
 				if (ev & (EPOLLERR | EPOLLHUP))
 					_bus->closeConnection(fd);
 			}
+			else if (dispatchExtensionFd(fd, ev))
+			{
+				/* handled by an extension's own socket */
+			}
 			else
 			{
 				if (ev & EPOLLIN)
@@ -266,7 +305,25 @@ void Server::run()
 		}
 
 		checkTimeouts();
+
+		time_t now = std::time(NULL);
+		for (size_t i = 0; i < _extensions.size(); ++i)
+			_extensions[i]->onTick(*this, now);
 	}
+}
+
+/* Route an epoll event to the extension owning that fd (if any). */
+bool Server::dispatchExtensionFd(int fd, uint32_t events)
+{
+	for (size_t i = 0; i < _extensions.size(); ++i)
+	{
+		if (_extensions[i]->ownsFd(fd))
+		{
+			_extensions[i]->onFdEvent(*this, fd, events);
+			return true;
+		}
+	}
+	return false;
 }
 
 void Server::shutdown()
@@ -464,6 +521,14 @@ void Server::dispatchCommand(Client *client, const Message &msg)
 	if (cmd == "WHOIS")		{ cmdWhois(client, msg); return; }
 	if (cmd == "USERHOST")	{ cmdUserhost(client, msg); return; }
 
+	// Extensions may add commands here — after the core chain, so they can
+	// never shadow an RFC command.
+	for (size_t i = 0; i < _extensions.size(); ++i)
+	{
+		if (_extensions[i]->onCommand(*this, *client, msg))
+			return;
+	}
+
 	sendReply(client, ERR_UNKNOWNCOMMAND, cmd + " :Unknown command");
 }
 
@@ -519,6 +584,9 @@ void Server::disconnectClient(int fd, const std::string &reason)
 		}
 		++it;
 	}
+
+	for (size_t i = 0; i < _extensions.size(); ++i)
+		_extensions[i]->onClientDisconnect(*this, *client, reason);
 
 	removeFromEpoll(fd);
 	close(fd);
