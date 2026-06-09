@@ -30,6 +30,7 @@ LIBCPP_SRCS	= $(LIBCPP)/src/str/format.cpp \
 
 # ── Project sources (everything except main.cpp) ──────────────
 PROJ_SRCS	= ../src/Server.cpp \
+			  ../src/Log.cpp \
 			  ../src/Client.cpp \
 			  ../src/Channel.cpp \
 			  ../src/Message.cpp \

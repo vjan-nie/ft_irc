@@ -23,6 +23,7 @@ LIBCPP_SRCS	= $(LIBCPP)/src/str/format.cpp \
 
 SRCS		= $(SRCDIR)/main.cpp \
 			  $(SRCDIR)/Server.cpp \
+			  $(SRCDIR)/Log.cpp \
 			  $(SRCDIR)/Client.cpp \
 			  $(SRCDIR)/Channel.cpp \
 			  $(SRCDIR)/Message.cpp \
