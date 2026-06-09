@@ -1,5 +1,5 @@
 #include "Message.hpp"
-#include <cctype>
+#include "libcpp/str/case.hpp"
 
 Message Message::parse(const std::string &raw)
 {
@@ -41,8 +41,7 @@ Message Message::parse(const std::string &raw)
 			pos = end;
 		}
 		// Uppercase the command
-		for (std::string::size_type i = 0; i < msg.command.size(); ++i)
-			msg.command[i] = std::toupper(static_cast<unsigned char>(msg.command[i]));
+		msg.command = libcpp::str::to_upper(msg.command);
 
 		if (end == std::string::npos)
 			return msg;

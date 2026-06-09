@@ -2,9 +2,8 @@
 
 #include "Server.hpp"
 #include "Bot.hpp"
+#include "libcpp/str/case.hpp"
 
-#include <sstream>
-#include <cctype>
 #include <iostream>
 
 /* ─── CAP ─── */
@@ -14,9 +13,7 @@ void Server::cmdCap(Client *client, const Message &msg)
 	if (msg.params.empty())
 		return;
 
-	std::string subcommand = msg.params[0];
-	for (size_t i = 0; i < subcommand.size(); ++i)
-		subcommand[i] = std::toupper(static_cast<unsigned char>(subcommand[i]));
+	std::string subcommand = libcpp::str::to_upper(msg.params[0]);
 
 	if (subcommand == "LS")
 	{
