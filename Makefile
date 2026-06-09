@@ -10,17 +10,25 @@ OBJDIR		= obj
 #  These sources compile cleanly under -std=c++98 -Wall -Wextra -Werror; they
 #  are built from source as part of ircserv (no external library is linked).
 LIBCPP		= vendor/libcpp
-INCLUDES	= -I include -I $(LIBCPP)/include
+INCLUDES	= -I include -I $(LIBCPP)/include -I $(LIBCPP)/c98/include
 
 LIBCPP_SRCS	= $(LIBCPP)/src/str/format.cpp \
 			  $(LIBCPP)/src/str/case.cpp \
 			  $(LIBCPP)/src/str/utf8.cpp \
+			  $(LIBCPP)/src/str/secure.cpp \
 			  $(LIBCPP)/src/util/config.cpp \
 			  $(LIBCPP)/src/term/color.cpp \
 			  $(LIBCPP)/src/term/style.cpp \
 			  $(LIBCPP)/src/term/table.cpp \
 			  $(LIBCPP)/src/term/stylesheet.cpp \
 			  $(LIBCPP)/src/term/writer.cpp
+
+# libcpp C++98 tier (vendor/libcpp/c98): generic building blocks promoted
+# out of this project — line framing, streaming CSV, epoll registration.
+LIBCPP98_SRCS	= $(LIBCPP)/c98/src/line_buffer.cpp \
+				  $(LIBCPP)/c98/src/csv_writer.cpp \
+				  $(LIBCPP)/c98/src/reactor.cpp \
+				  $(LIBCPP)/c98/src/buffered_socket.cpp
 
 SRCS		= $(SRCDIR)/main.cpp \
 			  $(SRCDIR)/Server.cpp \
@@ -37,13 +45,14 @@ SRCS		= $(SRCDIR)/main.cpp \
 			  $(SRCDIR)/CommandQuery.cpp \
 			  $(SRCDIR)/Bot.cpp
 
-OBJS		= $(SRCS:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
-LIBCPP_OBJS	= $(LIBCPP_SRCS:$(LIBCPP)/src/%.cpp=$(OBJDIR)/libcpp/%.o)
+OBJS			= $(SRCS:$(SRCDIR)/%.cpp=$(OBJDIR)/%.o)
+LIBCPP_OBJS		= $(LIBCPP_SRCS:$(LIBCPP)/src/%.cpp=$(OBJDIR)/libcpp/%.o)
+LIBCPP98_OBJS	= $(LIBCPP98_SRCS:$(LIBCPP)/c98/src/%.cpp=$(OBJDIR)/libcpp98/%.o)
 
 all: $(NAME)
 
-$(NAME): $(OBJS) $(LIBCPP_OBJS)
-	$(CXX) $(CXXFLAGS) $(OBJS) $(LIBCPP_OBJS) -o $(NAME)
+$(NAME): $(OBJS) $(LIBCPP_OBJS) $(LIBCPP98_OBJS)
+	$(CXX) $(CXXFLAGS) $(OBJS) $(LIBCPP_OBJS) $(LIBCPP98_OBJS) -o $(NAME)
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.cpp
 	@mkdir -p $(dir $@)
@@ -53,7 +62,11 @@ $(OBJDIR)/libcpp/%.o: $(LIBCPP)/src/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
--include $(OBJS:.o=.d) $(LIBCPP_OBJS:.o=.d)
+$(OBJDIR)/libcpp98/%.o: $(LIBCPP)/c98/src/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+
+-include $(OBJS:.o=.d) $(LIBCPP_OBJS:.o=.d) $(LIBCPP98_OBJS:.o=.d)
 
 clean:
 	rm -rf $(OBJDIR)
