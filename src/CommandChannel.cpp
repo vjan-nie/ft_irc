@@ -1,6 +1,7 @@
 /* ─── Channel commands: JOIN, PART ─── */
 
 #include "Server.hpp"
+#include "libcpp/str/format.hpp"
 
 #include <sstream>
 #include <iostream>
@@ -103,11 +104,9 @@ void Server::cmdJoin(Client *client, const Message &msg)
 		{
 			sendReply(client, RPL_TOPIC,
 					  name + " :" + chan->getTopic());
-			std::ostringstream oss;
-			oss << chan->getTopicTime();
 			sendReply(client, RPL_TOPICWHOTIME,
 					  name + " " + chan->getTopicSetter() + " "
-					  + oss.str());
+					  + libcpp::str::to_string(chan->getTopicTime()));
 		}
 		else
 		{

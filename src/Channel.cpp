@@ -1,6 +1,6 @@
 #include "Channel.hpp"
 #include "Client.hpp"
-#include <sstream>
+#include "libcpp/str/format.hpp"
 
 Channel::Channel(const std::string &name, Client *creator)
 	: _name(name),
@@ -58,9 +58,7 @@ std::string Channel::getModeParams() const
 	{
 		if (!params.empty())
 			params += " ";
-		std::ostringstream oss;
-		oss << _userLimit;
-		params += oss.str();
+		params += libcpp::str::to_string(_userLimit);
 	}
 	return params;
 }

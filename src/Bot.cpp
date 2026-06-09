@@ -3,8 +3,8 @@
 #include "Bot.hpp"
 #include "Server.hpp"
 #include "Client.hpp"
+#include "libcpp/str/format.hpp"
 
-#include <sstream>
 #include <ctime>
 #include <cstdlib>
 
@@ -83,10 +83,8 @@ void Bot::cmdInfo(Client *sender, const std::string &param)
 	if (param.empty() || param[0] != '#')
 	{
 		// Server info
-		std::ostringstream oss;
-		oss << "Server: " << _server->getServerName()
-			<< " v" << SERVER_VERSION;
-		reply(sender, oss.str());
+		reply(sender, "Server: " + _server->getServerName()
+				  + " v" + SERVER_VERSION);
 		return;
 	}
 
@@ -98,10 +96,9 @@ void Bot::cmdInfo(Client *sender, const std::string &param)
 		return;
 	}
 
-	std::ostringstream oss;
-	oss << "Channel " << param << ": " << chan->getMemberCount()
-		<< " users, modes: " << chan->getModeString();
-	reply(sender, oss.str());
+	reply(sender, "Channel " + param + ": "
+			  + libcpp::str::to_string(chan->getMemberCount())
+			  + " users, modes: " + chan->getModeString());
 
 	if (!chan->getTopic().empty())
 		reply(sender, "Topic: " + chan->getTopic());

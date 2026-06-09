@@ -1,8 +1,8 @@
 /* ─── Operator commands: KICK, INVITE, TOPIC, MODE ─── */
 
 #include "Server.hpp"
+#include "libcpp/str/format.hpp"
 
-#include <sstream>
 #include <cstdlib>
 #include <iostream>
 
@@ -164,11 +164,9 @@ void Server::cmdTopic(Client *client, const Message &msg)
 		{
 			sendReply(client, RPL_TOPIC,
 					  chanName + " :" + chan->getTopic());
-			std::ostringstream oss;
-			oss << chan->getTopicTime();
 			sendReply(client, RPL_TOPICWHOTIME,
 					  chanName + " " + chan->getTopicSetter()
-					  + " " + oss.str());
+					  + " " + libcpp::str::to_string(chan->getTopicTime()));
 		}
 		return;
 	}
@@ -221,10 +219,8 @@ void Server::cmdMode(Client *client, const Message &msg)
 				reply += " " + params;
 			sendReply(client, RPL_CHANNELMODEIS, reply);
 
-			std::ostringstream oss;
-			oss << chan->getCreationTime();
 			sendReply(client, RPL_CREATIONTIME,
-					  target + " " + oss.str());
+					  target + " " + libcpp::str::to_string(chan->getCreationTime()));
 			return;
 		}
 		handleChannelMode(client, chan, msg);
