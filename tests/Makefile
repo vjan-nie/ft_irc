@@ -39,6 +39,7 @@ LIBCPP98_SRCS	= $(LIBCPP)/c98/src/line_buffer.cpp \
 # ── Project sources (everything except main.cpp) ──────────────
 PROJ_SRCS	= ../src/Server.cpp \
 			  ../src/Log.cpp \
+			  ../src/extras/FancyLogSink.cpp \
 			  ../src/PlatformBus.cpp \
 			  ../src/AuditLog.cpp \
 			  ../src/Client.cpp \
@@ -91,7 +92,7 @@ $(NAME): $(ALL_OBJS)
 
 # Project sources
 $(OBJDIR)/proj_%.o: ../src/%.cpp
-	@mkdir -p $(OBJDIR)
+	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 # libcpp str/term modules

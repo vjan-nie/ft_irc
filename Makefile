@@ -33,6 +33,7 @@ LIBCPP98_SRCS	= $(LIBCPP)/c98/src/line_buffer.cpp \
 SRCS		= $(SRCDIR)/main.cpp \
 			  $(SRCDIR)/Server.cpp \
 			  $(SRCDIR)/Log.cpp \
+			  $(SRCDIR)/extras/FancyLogSink.cpp \
 			  $(SRCDIR)/PlatformBus.cpp \
 			  $(SRCDIR)/AuditLog.cpp \
 			  $(SRCDIR)/Client.cpp \

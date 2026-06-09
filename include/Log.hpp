@@ -4,8 +4,13 @@
 # include <string>
 
 /*
-** Log — server-side console logging rendered through libcpp's TermWriter
-** (markdown-style terminal output: coloured callouts + a startup banner).
+** Log — server-side console logging.
+**
+** The kernel ships a plain-iostream renderer (zero non-core dependencies, so
+** the mandatory tier links nothing extra). A fancier renderer can be plugged
+** in at startup via Log::setSink — the full tier installs FancyLogSink,
+** which renders through libcpp's TermWriter (markdown-style coloured
+** callouts + banner).
 **
 ** IMPORTANT: this is for the OPERATOR CONSOLE ONLY. It must never be used to
 ** build client-facing data — IRC clients (HexChat, nc) require raw RFC 2812
@@ -16,6 +21,18 @@
 */
 namespace Log
 {
+	/* One log line: kind is 'b'anner, 'i'nfo, 's'uccess, 'w'arn, 'e'rror. */
+	class ILogSink
+	{
+	public:
+		virtual ~ILogSink() {}
+		virtual void write(char kind, const std::string &msg) = 0;
+	};
+
+	/* Install a renderer (Log takes ownership; pass NULL to restore the
+	** plain fallback). */
+	void	setSink(ILogSink *sink);
+
 	void	banner(const std::string &title);
 	void	info(const std::string &msg);
 	void	success(const std::string &msg);

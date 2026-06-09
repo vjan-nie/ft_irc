@@ -1,57 +1,75 @@
 #include "Log.hpp"
-#include "libcpp/term/writer.hpp"
-#include "libcpp/term/style.hpp"
 
 #include <iostream>
 
 /*
-** Each call spins up a fresh TermWriter bound to the target stream, emits a
-** single styled element, and flushes. Logging happens on connection-level
-** events (not per IRC message), so the cost is irrelevant and we avoid any
-** shared mutable state.
+** Plain-iostream renderer — the only logging the kernel needs. The full
+** build swaps in FancyLogSink (src/extras/) at startup via setSink; the
+** mandatory tier never links any terminal-styling code.
 */
 
 namespace
 {
-	/* helper: render one element of the given kind, then flush */
-	void	render(std::ostream &os, char kind, const std::string &msg)
-	{
-		libcpp::TermStyle	ts;
-		libcpp::TermWriter	w(ts, os);
+	Log::ILogSink	*g_sink = 0;
 
+	void	fallback(char kind, const std::string &msg)
+	{
 		switch (kind)
 		{
-			case 'b': w.h1(msg); break;
-			case 'i': w.info(msg); break;
-			case 's': w.success(msg); break;
-			case 'w': w.warn(msg); break;
-			case 'e': w.error(msg); break;
+			case 'b':
+				std::cout << "== " << msg << " ==" << std::endl;
+				break;
+			case 'i':
+				std::cout << "[ircserv] info: " << msg << std::endl;
+				break;
+			case 's':
+				std::cout << "[ircserv] ok:   " << msg << std::endl;
+				break;
+			case 'w':
+				std::cerr << "[ircserv] warn: " << msg << std::endl;
+				break;
+			case 'e':
+				std::cerr << "[ircserv] error: " << msg << std::endl;
+				break;
 		}
-		w.flush();
 	}
+
+	void	render(char kind, const std::string &msg)
+	{
+		if (g_sink)
+			g_sink->write(kind, msg);
+		else
+			fallback(kind, msg);
+	}
+}
+
+void	Log::setSink(ILogSink *sink)
+{
+	delete g_sink;
+	g_sink = sink;
 }
 
 void	Log::banner(const std::string &title)
 {
-	render(std::cout, 'b', title);
+	render('b', title);
 }
 
 void	Log::info(const std::string &msg)
 {
-	render(std::cout, 'i', msg);
+	render('i', msg);
 }
 
 void	Log::success(const std::string &msg)
 {
-	render(std::cout, 's', msg);
+	render('s', msg);
 }
 
 void	Log::warn(const std::string &msg)
 {
-	render(std::cerr, 'w', msg);
+	render('w', msg);
 }
 
 void	Log::error(const std::string &msg)
 {
-	render(std::cerr, 'e', msg);
+	render('e', msg);
 }
