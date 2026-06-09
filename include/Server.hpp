@@ -12,9 +12,12 @@
 # include "Replies.hpp"
 
 class Bot;
+class PlatformBus;
 
 class Server
 {
+	friend class PlatformBus; /* may register fds into the shared epoll */
+
 public:
 	Server(int port, const std::string &password);
 	~Server();
@@ -103,6 +106,9 @@ private:
 	bool	isValidChannelName(const std::string &name) const;
 	void	broadcastToChannels(Client *client, const std::string &msg);
 
+	/* ─── Platform bus (optional, config-gated) ─── */
+	void	setupPlatformBus();
+
 	/* ─── Data ─── */
 	int							_port;
 	std::string					_password;
@@ -112,6 +118,7 @@ private:
 	std::map<int, Client *>		_clients;
 	std::map<std::string, Channel *>	_channels;
 	Bot							*_bot;
+	PlatformBus					*_bus;
 	time_t						_lastPingCheck;
 
 	static const int			MAX_EVENTS = 64;

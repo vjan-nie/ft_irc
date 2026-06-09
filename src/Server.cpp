@@ -1,7 +1,9 @@
 #include "Server.hpp"
 #include "Bot.hpp"
 #include "Log.hpp"
+#include "PlatformBus.hpp"
 #include "libcpp/str/format.hpp"
+#include "libcpp/util/config.hpp"
 
 #include <iostream>
 #include <cstring>
@@ -27,6 +29,7 @@ Server::Server(int port, const std::string &password)
 	  _listenFd(-1),
 	  _epollFd(-1),
 	  _bot(NULL),
+	  _bus(NULL),
 	  _lastPingCheck(std::time(NULL))
 {
 	createListenSocket();
@@ -42,10 +45,59 @@ Server::Server(int port, const std::string &password)
 		_bot = NULL;
 	}
 	Log::banner("ft_irc - listening on port " + libcpp::str::to_string(_port));
+	setupPlatformBus();
+}
+
+/*
+** Optional real-time platform bus. Enabled only when the env var FT_IRC_CONFIG
+** points to an INI file with [bus] enabled = true. Without it, ircserv is the
+** plain RFC server the subject grades.
+**
+**   [bus]
+**   enabled = true
+**   port    = 6700
+**   secret  = change-me
+**   nick    = platform
+*/
+void Server::setupPlatformBus()
+{
+	const char *cfgPath = std::getenv("FT_IRC_CONFIG");
+	if (!cfgPath)
+		return;
+
+	libcpp::util::Config cfg;
+	if (!cfg.load_file(cfgPath))
+	{
+		Log::warn(std::string("could not read FT_IRC_CONFIG: ") + cfgPath);
+		return;
+	}
+	if (!cfg.get_bool("bus", "enabled", false))
+		return;
+
+	int port = cfg.get_int("bus", "port", 6700);
+	std::string secret = cfg.get("bus", "secret", "");
+	std::string nick = cfg.get("bus", "nick", "platform");
+
+	try
+	{
+		_bus = new PlatformBus(this, port, secret, nick);
+	}
+	catch (const std::bad_alloc &)
+	{
+		Log::warn("could not create platform bus (out of memory)");
+		_bus = NULL;
+		return;
+	}
+	if (!_bus->start())
+	{
+		delete _bus;
+		_bus = NULL;
+	}
 }
 
 Server::~Server()
 {
+	delete _bus;
 	delete _bot;
 	for (std::map<int, Client *>::iterator it = _clients.begin();
 		 it != _clients.end(); ++it)
@@ -148,6 +200,17 @@ void Server::run()
 			if (fd == _listenFd)
 			{
 				acceptClient();
+			}
+			else if (_bus && fd == _bus->listenFd())
+			{
+				_bus->acceptConnection();
+			}
+			else if (_bus && _bus->owns(fd))
+			{
+				if (ev & EPOLLIN)
+					_bus->handleInput(fd);
+				if (ev & (EPOLLERR | EPOLLHUP))
+					_bus->closeConnection(fd);
 			}
 			else
 			{
