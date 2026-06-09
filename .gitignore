@@ -10,3 +10,6 @@ tests/test_runner
 *.o
 *.d
 .DS_Store
+
+# Docker / local secrets
+.env

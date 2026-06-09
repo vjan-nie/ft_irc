@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Full ft_irc stack: the C++98 server + the Claude-backed Rust companion.
+#
+#    cp .env.example .env     # then set ANTHROPIC_API_KEY
+#    docker compose up --build
+#
+#  The companion connects to the server over the compose network (host
+#  "ircserv"), joins $IRC_CHANNELS, and answers when addressed. The server
+#  itself is subject-clean and unaware the companion is AI.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  ircserv:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ft_irc/ircserv
+    command: ["6667", "${IRC_SERVER_PASSWORD:-changeme}"]
+    ports:
+      - "${IRC_PORT:-6667}:6667"
+    restart: unless-stopped
+
+  ai-assistant:
+    build:
+      context: ./companions/ai-assistant
+    image: ft_irc/ai-assistant
+    depends_on:
+      - ircserv
+    environment:
+      IRC_HOST: ircserv
+      IRC_PORT: "6667"
+      IRC_PASS: "${IRC_SERVER_PASSWORD:-changeme}"
+      IRC_NICK: "${IRC_NICK:-assistant}"
+      IRC_CHANNELS: "${IRC_CHANNELS:-#general}"
+      # Required — set in .env. The ${VAR:?msg} form fails fast if unset.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in .env}"
+      ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-claude-opus-4-8}"
+    # The companion has its own 3s reconnect loop, so it tolerates the server
+    # not being ready the instant it starts.
+    restart: unless-stopped
