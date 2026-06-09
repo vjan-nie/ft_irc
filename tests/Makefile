@@ -33,6 +33,7 @@ LIBCPP_SRCS	= $(LIBCPP)/src/str/format.cpp \
 PROJ_SRCS	= ../src/Server.cpp \
 			  ../src/Log.cpp \
 			  ../src/PlatformBus.cpp \
+			  ../src/AuditLog.cpp \
 			  ../src/Client.cpp \
 			  ../src/Channel.cpp \
 			  ../src/Message.cpp \
@@ -81,17 +82,19 @@ $(NAME): $(ALL_OBJS)
 # Project sources
 $(OBJDIR)/proj_%.o: ../src/%.cpp
 	@mkdir -p $(OBJDIR)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 # libcpp str/term modules
 $(OBJDIR)/libcpp/%.o: $(LIBCPP)/src/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 # Test sources
 $(OBJDIR)/%.o: %.cpp
 	@mkdir -p $(OBJDIR)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+
+-include $(ALL_OBJS:.o=.d)
 
 # Google Test
 $(GTEST_OBJ): $(GTEST_SRC)

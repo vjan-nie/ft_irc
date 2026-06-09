@@ -26,6 +26,7 @@ SRCS		= $(SRCDIR)/main.cpp \
 			  $(SRCDIR)/Server.cpp \
 			  $(SRCDIR)/Log.cpp \
 			  $(SRCDIR)/PlatformBus.cpp \
+			  $(SRCDIR)/AuditLog.cpp \
 			  $(SRCDIR)/Client.cpp \
 			  $(SRCDIR)/Channel.cpp \
 			  $(SRCDIR)/Message.cpp \
@@ -46,11 +47,13 @@ $(NAME): $(OBJS) $(LIBCPP_OBJS)
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 $(OBJDIR)/libcpp/%.o: $(LIBCPP)/src/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+
+-include $(OBJS:.o=.d) $(LIBCPP_OBJS:.o=.d)
 
 clean:
 	rm -rf $(OBJDIR)
