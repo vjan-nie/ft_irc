@@ -86,6 +86,22 @@ docker build --target test -t ircserv-test .
 > subject-clean and is unaware the companion is AI. See that directory's
 > README for how it works.
 
+#### Optional real-time / web tier
+
+```bash
+docker compose --profile platform up --build
+```
+
+Adds two more services: **realtime-agnostic** (a Rust WebSocket pub/sub
+fan-out engine on `:4000`, with database change-capture) and
+**realtime-bridge** — a companion that mirrors IRC and realtime in *both*
+directions. IRC channel messages are published to realtime (so browser /
+WebSocket clients and DB-CDC consumers see live IRC), and realtime events
+(`pg/**`, `mongo/**`, browser publishes under `irc-in/<channel>`) are injected
+back into IRC channels. Both directions are verified end-to-end. The default
+`docker compose up` is unchanged; this tier is purely additive and outside the
+42 build. See `companions/realtime-bridge/`.
+
 ### Connecting with HexChat
 
 1. Open HexChat → Add a new network
