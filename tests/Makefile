@@ -44,6 +44,7 @@ PROJ_SRCS	= ../src/Server.cpp \
 			  ../src/Client.cpp \
 			  ../src/Channel.cpp \
 			  ../src/Message.cpp \
+			  ../src/IrcCase.cpp \
 			  ../src/CommandRegistration.cpp \
 			  ../src/CommandChannel.cpp \
 			  ../src/CommandMessaging.cpp \

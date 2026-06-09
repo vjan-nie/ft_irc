@@ -2,6 +2,7 @@
 
 #include "Server.hpp"
 #include "Bot.hpp"
+#include "IrcCase.hpp"
 #include "Log.hpp"
 #include "libcpp/str/case.hpp"
 
@@ -66,7 +67,7 @@ void Server::cmdNick(Client *client, const Message &msg)
 		return;
 	}
 
-	// Check if nickname is taken (case-sensitive for simplicity)
+	// Check if nickname is taken (CASEMAPPING=ascii: "Bob" collides "bob")
 	Client *existing = findClientByNick(nick);
 	if (existing && existing != client)
 	{
@@ -76,7 +77,7 @@ void Server::cmdNick(Client *client, const Message &msg)
 	}
 
 	// Reject if it collides with bot nickname
-	if (_bot && nick == _bot->getNickname())
+	if (_bot && ircEquals(nick, _bot->getNickname()))
 	{
 		sendReply(client, ERR_NICKNAMEINUSE,
 				  nick + " :Nickname is already in use");

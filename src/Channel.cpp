@@ -1,5 +1,6 @@
 #include "Channel.hpp"
 #include "Client.hpp"
+#include "IrcCase.hpp"
 #include "libcpp/str/format.hpp"
 
 Channel::Channel(const std::string &name, Client *creator)
@@ -116,13 +117,7 @@ bool Channel::isMember(Client *client) const
 
 bool Channel::isMember(const std::string &nickname) const
 {
-	for (std::map<int, Client *>::const_iterator it = _members.begin();
-		 it != _members.end(); ++it)
-	{
-		if (it->second->getNickname() == nickname)
-			return true;
-	}
-	return false;
+	return findMember(nickname) != NULL;
 }
 
 bool Channel::isEmpty() const
@@ -147,19 +142,21 @@ void Channel::setOperator(Client *client, bool op)
 
 /* ─── Invite management ─── */
 
+/* Invites are stored casemapped so "INVITE Bob" honours a later "JOIN" as
+** "bob" (CASEMAPPING=ascii). */
 void Channel::addInvite(const std::string &nickname)
 {
-	_inviteList.insert(nickname);
+	_inviteList.insert(ircToLower(nickname));
 }
 
 bool Channel::isInvited(const std::string &nickname) const
 {
-	return _inviteList.count(nickname) > 0;
+	return _inviteList.count(ircToLower(nickname)) > 0;
 }
 
 void Channel::removeInvite(const std::string &nickname)
 {
-	_inviteList.erase(nickname);
+	_inviteList.erase(ircToLower(nickname));
 }
 
 /* ─── Messaging ─── */
@@ -182,7 +179,7 @@ Client *Channel::findMember(const std::string &nickname) const
 	for (std::map<int, Client *>::const_iterator it = _members.begin();
 		 it != _members.end(); ++it)
 	{
-		if (it->second->getNickname() == nickname)
+		if (ircEquals(it->second->getNickname(), nickname))
 			return it->second;
 	}
 	return NULL;

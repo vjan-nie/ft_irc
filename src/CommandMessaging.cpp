@@ -2,6 +2,7 @@
 
 #include "Server.hpp"
 #include "Bot.hpp"
+#include "IrcCase.hpp"
 
 #include <sstream>
 #include <iostream>
@@ -57,7 +58,7 @@ void Server::cmdPrivmsg(Client *client, const Message &msg)
 		else
 		{
 			// Check if it's the bot
-			if (_bot && target == _bot->getNickname())
+			if (_bot && ircEquals(target, _bot->getNickname()))
 			{
 				_bot->handleMessage(client, text);
 				continue;

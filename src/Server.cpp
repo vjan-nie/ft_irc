@@ -1,4 +1,5 @@
 #include "Server.hpp"
+#include "IrcCase.hpp"
 #include "Bot.hpp"
 #include "Log.hpp"
 #include "PlatformBus.hpp"
@@ -447,7 +448,7 @@ Client *Server::findClientByNick(const std::string &nickname) const
 	for (std::map<int, Client *>::const_iterator it = _clients.begin();
 		 it != _clients.end(); ++it)
 	{
-		if (it->second->getNickname() == nickname)
+		if (ircEquals(it->second->getNickname(), nickname))
 			return it->second;
 	}
 	return NULL;
@@ -504,9 +505,12 @@ void Server::disconnectClient(int fd, const std::string &reason)
 
 /* ─── Channel management ─── */
 
+/* Channels are keyed by their casemapped name; the original-case display
+** name lives in Channel::_name. */
 Channel *Server::findChannel(const std::string &name) const
 {
-	std::map<std::string, Channel *>::const_iterator it = _channels.find(name);
+	std::map<std::string, Channel *>::const_iterator it =
+		_channels.find(ircToLower(name));
 	if (it != _channels.end())
 		return it->second;
 	return NULL;
@@ -524,13 +528,14 @@ Channel *Server::createChannel(const std::string &name, Client *creator)
 		Log::error("out of memory: cannot create channel " + name);
 		return NULL;
 	}
-	_channels[name] = channel;
+	_channels[ircToLower(name)] = channel;
 	return channel;
 }
 
 void Server::removeChannel(const std::string &name)
 {
-	std::map<std::string, Channel *>::iterator it = _channels.find(name);
+	std::map<std::string, Channel *>::iterator it =
+		_channels.find(ircToLower(name));
 	if (it != _channels.end())
 	{
 		delete it->second;

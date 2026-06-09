@@ -38,6 +38,7 @@ SRCS		= $(SRCDIR)/main.cpp \
 			  $(SRCDIR)/Client.cpp \
 			  $(SRCDIR)/Channel.cpp \
 			  $(SRCDIR)/Message.cpp \
+			  $(SRCDIR)/IrcCase.cpp \
 			  $(SRCDIR)/CommandRegistration.cpp \
 			  $(SRCDIR)/CommandChannel.cpp \
 			  $(SRCDIR)/CommandMessaging.cpp \
