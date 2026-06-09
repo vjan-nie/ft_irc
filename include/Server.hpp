@@ -11,15 +11,10 @@
 # include "Message.hpp"
 # include "Replies.hpp"
 
-class Bot;
-class PlatformBus;
-class AuditLog;
 class IServerExtension;
 
 class Server
 {
-	friend class PlatformBus; /* may register fds into the shared epoll */
-
 public:
 	Server(int port, const std::string &password);
 	~Server();
@@ -130,8 +125,6 @@ private:
 	int							_epollFd;
 	std::map<int, Client *>		_clients;
 	std::map<std::string, Channel *>	_channels;
-	PlatformBus					*_bus;
-	AuditLog					*_audit;
 	std::vector<IServerExtension *>	_extensions;
 	time_t						_lastPingCheck;
 

@@ -24,6 +24,19 @@ AuditLog::~AuditLog()
 		_out.close();
 }
 
+/* ─── IServerExtension ─── */
+
+const char *AuditLog::name() const
+{
+	return "audit-log";
+}
+
+void AuditLog::onAudit(const std::string &event, const std::string &actor,
+					   const std::string &detail)
+{
+	log(event, actor, detail);
+}
+
 bool AuditLog::ok() const
 {
 	return _out.is_open();

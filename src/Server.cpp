@@ -31,8 +31,6 @@ Server::Server(int port, const std::string &password)
 	  _serverName(SERVER_NAME),
 	  _listenFd(-1),
 	  _epollFd(-1),
-	  _bus(NULL),
-	  _audit(NULL),
 	  _lastPingCheck(std::time(NULL))
 {
 	createListenSocket();
@@ -81,22 +79,25 @@ void Server::setupPlatformFeatures()
 	if (cfg.get_bool("audit", "enabled", false))
 	{
 		std::string path = cfg.get("audit", "path", "./ircserv-audit.csv");
+		AuditLog *auditExt = NULL;
 		try
 		{
-			_audit = new AuditLog(path);
+			auditExt = new AuditLog(path);
 		}
 		catch (const std::bad_alloc &)
 		{
-			_audit = NULL;
+			auditExt = NULL;
 		}
-		if (_audit && !_audit->ok())
+		if (auditExt && !auditExt->ok())
 		{
 			Log::warn("could not open audit log: " + path);
-			delete _audit;
-			_audit = NULL;
+			delete auditExt;
 		}
-		else if (_audit)
+		else if (auditExt)
+		{
+			addExtension(auditExt);
 			Log::info("audit log: " + path);
+		}
 	}
 
 	if (cfg.get_bool("bus", "enabled", false))
@@ -107,17 +108,12 @@ void Server::setupPlatformFeatures()
 
 		try
 		{
-			_bus = new PlatformBus(this, port, secret, nick);
+			/* listens lazily via onServerStart, once run() begins */
+			addExtension(new PlatformBus(this, port, secret, nick));
 		}
 		catch (const std::bad_alloc &)
 		{
 			Log::warn("could not create platform bus (out of memory)");
-			_bus = NULL;
-		}
-		if (_bus && !_bus->start())
-		{
-			delete _bus;
-			_bus = NULL;
 		}
 	}
 }
@@ -125,8 +121,6 @@ void Server::setupPlatformFeatures()
 void Server::audit(const std::string &event, const std::string &actor,
 				   const std::string &detail)
 {
-	if (_audit)
-		_audit->log(event, actor, detail);
 	for (size_t i = 0; i < _extensions.size(); ++i)
 		_extensions[i]->onAudit(event, actor, detail);
 }
@@ -162,8 +156,6 @@ Server::~Server()
 	for (std::vector<IServerExtension *>::reverse_iterator it =
 			 _extensions.rbegin(); it != _extensions.rend(); ++it)
 		delete *it;
-	delete _audit;
-	delete _bus;
 	for (std::map<int, Client *>::iterator it = _clients.begin();
 		 it != _clients.end(); ++it)
 	{
@@ -272,32 +264,19 @@ void Server::run()
 			{
 				acceptClient();
 			}
-			else if (_bus && fd == _bus->listenFd())
-			{
-				_bus->acceptConnection();
-			}
-			else if (_bus && _bus->owns(fd))
-			{
-				if (ev & EPOLLIN)
-					_bus->handleInput(fd);
-				if (ev & (EPOLLERR | EPOLLHUP))
-					_bus->closeConnection(fd);
-			}
-			else if (dispatchExtensionFd(fd, ev))
-			{
-				/* handled by an extension's own socket */
-			}
-			else
+			else if (_clients.count(fd))
 			{
 				if (ev & EPOLLIN)
 					handleClientInput(fd);
-				if (ev & EPOLLOUT)
+				if ((ev & EPOLLOUT) && _clients.count(fd))
 					handleClientOutput(fd);
-				if (ev & (EPOLLERR | EPOLLHUP))
-				{
-					if (_clients.count(fd))
-						disconnectClient(fd, "Connection error");
-				}
+				if ((ev & (EPOLLERR | EPOLLHUP)) && _clients.count(fd))
+					disconnectClient(fd, "Connection error");
+			}
+			else if (!dispatchExtensionFd(fd, ev))
+			{
+				/* fd belongs to nobody (raced a disconnect) — drop it */
+				removeFromEpoll(fd);
 			}
 		}
 

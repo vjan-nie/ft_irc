@@ -38,6 +38,38 @@ PlatformBus::~PlatformBus()
 		close(_listenFd);
 }
 
+/* ─── IServerExtension ─── */
+
+const char *PlatformBus::name() const
+{
+	return "platform-bus";
+}
+
+void PlatformBus::onServerStart(Server &server)
+{
+	(void)server;
+	start(); /* on failure the bus stays inert (no fds owned) */
+}
+
+bool PlatformBus::ownsFd(int fd) const
+{
+	return (fd >= 0 && fd == _listenFd) || owns(fd);
+}
+
+void PlatformBus::onFdEvent(Server &server, int fd, uint32_t events)
+{
+	(void)server;
+	if (fd == _listenFd)
+	{
+		acceptConnection();
+		return;
+	}
+	if (events & EPOLLIN)
+		handleInput(fd);
+	if ((events & (EPOLLERR | EPOLLHUP)) && owns(fd))
+		closeConnection(fd);
+}
+
 bool PlatformBus::start()
 {
 	_listenFd = socket(AF_INET, SOCK_STREAM, 0);
@@ -79,7 +111,13 @@ bool PlatformBus::start()
 		return false;
 	}
 
-	_server->addToEpoll(_listenFd, EPOLLIN);
+	if (!_server->registerExternalFd(_listenFd, EPOLLIN))
+	{
+		Log::warn("platform-bus: could not register listen fd");
+		close(_listenFd);
+		_listenFd = -1;
+		return false;
+	}
 	Log::info("platform-bus listening on 127.0.0.1:" + libcpp::str::to_string(_port));
 	return true;
 }
@@ -108,10 +146,14 @@ void PlatformBus::acceptConnection()
 		return;
 	}
 
+	if (!_server->registerExternalFd(fd, EPOLLIN))
+	{
+		close(fd);
+		return;
+	}
 	Conn conn;
 	conn.authed = _secret.empty(); /* no secret configured -> loopback trust */
 	_conns[fd] = conn;
-	_server->addToEpoll(fd, EPOLLIN);
 }
 
 void PlatformBus::handleInput(int fd)
@@ -152,7 +194,7 @@ void PlatformBus::closeConnection(int fd)
 {
 	if (_conns.find(fd) == _conns.end())
 		return;
-	_server->removeFromEpoll(fd);
+	_server->unregisterExternalFd(fd);
 	close(fd);
 	_conns.erase(fd);
 }

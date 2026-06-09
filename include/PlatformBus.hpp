@@ -4,6 +4,7 @@
 # include <string>
 # include <map>
 
+# include "ext/IServerExtension.hpp"
 # include "libcpp98/line_buffer.hpp"
 
 class Server;
@@ -30,12 +31,18 @@ class Server;
 **   PUB <#channel> <type> :<message>  inject an event into a channel
 **   PING                              liveness check -> "PONG"
 */
-class PlatformBus
+class PlatformBus : public IServerExtension
 {
 public:
 	PlatformBus(Server *server, int port, const std::string &secret,
 				const std::string &serviceNick);
 	~PlatformBus();
+
+	/* ─── IServerExtension ─── */
+	const char	*name() const;
+	void		onServerStart(Server &server);   /* binds + listens */
+	bool		ownsFd(int fd) const;            /* listen fd + connections */
+	void		onFdEvent(Server &server, int fd, uint32_t events);
 
 	bool	start();                       /* bind+listen on 127.0.0.1:port */
 	int		listenFd() const;
