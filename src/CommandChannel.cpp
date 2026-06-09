@@ -123,6 +123,17 @@ void Server::cmdJoin(Client *client, const Message &msg)
 				  "= " + name + " :" + chan->getNamesList());
 		sendReply(client, RPL_ENDOFNAMES,
 				  name + " :End of /NAMES list");
+
+		// Proactively report channel modes (mirrors the MODE query) so the
+		// client sees +itkl state on join without having to ask.
+		std::string modes = chan->getModeString();
+		std::string modeParams = chan->getModeParams();
+		std::string modeReply = name + " " + modes;
+		if (!modeParams.empty())
+			modeReply += " " + modeParams;
+		sendReply(client, RPL_CHANNELMODEIS, modeReply);
+		sendReply(client, RPL_CREATIONTIME,
+				  name + " " + libcpp::str::to_string(chan->getCreationTime()));
 	}
 }
 

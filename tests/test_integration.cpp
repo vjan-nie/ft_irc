@@ -96,6 +96,8 @@ TEST_F(IntegrationTest, JoinChannel)
 	EXPECT_NE(reply.find("JOIN"), std::string::npos) << "Expected JOIN echo";
 	EXPECT_TRUE(tc.hasNumeric(reply, "353")) << "Expected RPL_NAMREPLY";
 	EXPECT_TRUE(tc.hasNumeric(reply, "366")) << "Expected RPL_ENDOFNAMES";
+	EXPECT_TRUE(tc.hasNumeric(reply, "324")) << "Expected RPL_CHANNELMODEIS on join";
+	EXPECT_TRUE(tc.hasNumeric(reply, "329")) << "Expected RPL_CREATIONTIME on join";
 
 	tc.sendCmd("QUIT");
 }
