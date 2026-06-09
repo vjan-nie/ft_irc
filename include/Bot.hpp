@@ -4,15 +4,26 @@
 # include <string>
 # include <vector>
 
+# include "ext/IServerExtension.hpp"
+
 class Server;
 class Client;
-class Message;
+struct Message;
 
-class Bot
+/* Bonus bot — a virtual participant plugged in through the extension seam:
+** it claims PRIVMSGs addressed to its nick (onPrivmsg) and reserves that
+** nick against clients (reservesNick). */
+class Bot : public IServerExtension
 {
 public:
 	Bot(Server *server);
 	~Bot();
+
+	/* ─── IServerExtension ─── */
+	const char	*name() const;
+	bool		onPrivmsg(Server &server, Client &sender,
+						  const std::string &target, const std::string &text);
+	bool		reservesNick(const std::string &nick) const;
 
 	const std::string	&getNickname() const;
 	void				handleMessage(Client *sender, const std::string &text);

@@ -1,7 +1,6 @@
 /* ─── Messaging commands: PRIVMSG, NOTICE, PING, PONG, QUIT ─── */
 
 #include "Server.hpp"
-#include "Bot.hpp"
 #include "IrcCase.hpp"
 #include "ext/IServerExtension.hpp"
 
@@ -64,13 +63,6 @@ void Server::cmdPrivmsg(Client *client, const Message &msg)
 				handled = _extensions[k]->onPrivmsg(*this, *client, target, text);
 			if (handled)
 				continue;
-
-			// Check if it's the bot
-			if (_bot && ircEquals(target, _bot->getNickname()))
-			{
-				_bot->handleMessage(client, text);
-				continue;
-			}
 
 			// Private message to user
 			Client *dest = findClientByNick(target);

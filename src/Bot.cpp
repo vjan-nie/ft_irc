@@ -3,6 +3,7 @@
 #include "Bot.hpp"
 #include "Server.hpp"
 #include "Client.hpp"
+#include "IrcCase.hpp"
 #include "libcpp/str/format.hpp"
 
 #include <ctime>
@@ -28,6 +29,28 @@ Bot::Bot(Server *server)
 }
 
 Bot::~Bot() {}
+
+/* ─── IServerExtension ─── */
+
+const char *Bot::name() const
+{
+	return "bot";
+}
+
+bool Bot::onPrivmsg(Server &server, Client &sender,
+					const std::string &target, const std::string &text)
+{
+	(void)server;
+	if (!ircEquals(target, _nickname))
+		return false;
+	handleMessage(&sender, text);
+	return true;
+}
+
+bool Bot::reservesNick(const std::string &nick) const
+{
+	return ircEquals(nick, _nickname);
+}
 
 const std::string &Bot::getNickname() const
 {

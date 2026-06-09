@@ -1,7 +1,6 @@
 /* ─── Registration commands: CAP, PASS, NICK, USER ─── */
 
 #include "Server.hpp"
-#include "Bot.hpp"
 #include "IrcCase.hpp"
 #include "Log.hpp"
 #include "ext/IServerExtension.hpp"
@@ -78,15 +77,7 @@ void Server::cmdNick(Client *client, const Message &msg)
 		return;
 	}
 
-	// Reject if it collides with bot nickname
-	if (_bot && ircEquals(nick, _bot->getNickname()))
-	{
-		sendReply(client, ERR_NICKNAMEINUSE,
-				  nick + " :Nickname is already in use");
-		return;
-	}
-
-	// Reject nicks reserved by extensions (virtual participants)
+	// Reject nicks reserved by extensions (bot, virtual participants)
 	for (size_t i = 0; i < _extensions.size(); ++i)
 	{
 		if (_extensions[i]->reservesNick(nick))

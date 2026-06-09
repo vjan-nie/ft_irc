@@ -34,7 +34,9 @@ protected:
 			}
 		}
 		ASSERT_NE(server, nullptr) << "Could not bind to any port for BotTest";
-		bot = server->getBot();
+		/* The bot is an extension now; build our own instance against the
+		 * live server and let the fixture own it. */
+		bot = new Bot(server);
 		ASSERT_NE(bot, nullptr);
 
 		sender = new Client(999, "127.0.0.1");
@@ -45,6 +47,7 @@ protected:
 	void TearDown() override
 	{
 		delete sender;
+		delete bot;
 		delete server;
 	}
 

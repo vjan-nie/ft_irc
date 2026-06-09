@@ -31,7 +31,6 @@ Server::Server(int port, const std::string &password)
 	  _serverName(SERVER_NAME),
 	  _listenFd(-1),
 	  _epollFd(-1),
-	  _bot(NULL),
 	  _bus(NULL),
 	  _audit(NULL),
 	  _lastPingCheck(std::time(NULL))
@@ -41,12 +40,11 @@ Server::Server(int port, const std::string &password)
 	addToEpoll(_listenFd, EPOLLIN);
 	try
 	{
-		_bot = new Bot(this);
+		addExtension(new Bot(this)); /* temporary: moves to tier TU */
 	}
 	catch (const std::bad_alloc &)
 	{
 		Log::warn("could not create bot (out of memory)");
-		_bot = NULL;
 	}
 	Log::banner("ft_irc - listening on port " + libcpp::str::to_string(_port));
 	setupPlatformFeatures();
@@ -166,7 +164,6 @@ Server::~Server()
 		delete *it;
 	delete _audit;
 	delete _bus;
-	delete _bot;
 	for (std::map<int, Client *>::iterator it = _clients.begin();
 		 it != _clients.end(); ++it)
 	{
@@ -641,7 +638,6 @@ void Server::removeChannel(const std::string &name)
 
 const std::string &Server::getPassword() const { return _password; }
 const std::string &Server::getServerName() const { return _serverName; }
-Bot *Server::getBot() const { return _bot; }
 
 /* ─── Utility ─── */
 

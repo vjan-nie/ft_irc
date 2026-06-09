@@ -40,7 +40,6 @@ public:
 	/* ─── Getters ─── */
 	const std::string	&getPassword() const;
 	const std::string	&getServerName() const;
-	Bot					*getBot() const;
 
 	/* ─── Reply helpers ─── */
 	void	sendReply(Client *client, const std::string &numeric,
@@ -131,7 +130,6 @@ private:
 	int							_epollFd;
 	std::map<int, Client *>		_clients;
 	std::map<std::string, Channel *>	_channels;
-	Bot							*_bot;
 	PlatformBus					*_bus;
 	AuditLog					*_audit;
 	std::vector<IServerExtension *>	_extensions;
