@@ -50,12 +50,9 @@ services:
       - "${REALTIME_PORT:-4000}:4000"
     environment:
       RUST_LOG: "${RUST_LOG:-info}"
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:4000/v1/health"]
-      interval: 15s
-      timeout: 3s
-      start_period: 10s
-      retries: 3
+    # No healthcheck: the realtime image is distroless (no curl/sh to probe
+    # with). The bridge below has its own 3s reconnect loop, which is the real
+    # readiness gate.
     restart: unless-stopped
 
   realtime-bridge:
@@ -67,7 +64,7 @@ services:
       ircserv:
         condition: service_started
       realtime:
-        condition: service_healthy
+        condition: service_started
     environment:
       IRC_HOST: ircserv
       IRC_PORT: "6667"
@@ -78,4 +75,7 @@ services:
       RT_WS_URL: "ws://realtime:4000/ws"
       RT_INBOUND_TOPICS: "${RT_INBOUND_TOPICS:-pg/**,mongo/**,irc-in/**}"
       RT_DEFAULT_CHANNEL: "${RT_DEFAULT_CHANNEL:-#general}"
+      RT_PUPPETS: "${RT_PUPPETS:-true}"
+      RT_PUPPET_MAX: "${RT_PUPPET_MAX:-50}"
+      RT_PUPPET_TTL_SECS: "${RT_PUPPET_TTL_SECS:-120}"
     restart: unless-stopped
