@@ -13,3 +13,5 @@ tests/test_runner
 
 # Docker / local secrets
 .env
+
+.claude/workflow/tasks/*

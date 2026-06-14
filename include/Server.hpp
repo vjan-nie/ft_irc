@@ -74,6 +74,7 @@ private:
 	void	handleClientOutput(int fd);
 	void	handleMessage(Client *client, const std::string &raw);
 	void	checkTimeouts();
+	void	updateEpollInterest(Client *client);
 	bool	dispatchExtensionFd(int fd, uint32_t events);
 
 	/* ─── Command dispatch ─── */
@@ -125,6 +126,7 @@ private:
 	** stays below in run() (src/Server.cpp). */
 	libcpp98::Reactor			_reactor;
 	std::map<int, Client *>		_clients;
+	std::map<int, uint32_t>		_epollMask;
 	std::map<std::string, Channel *>	_channels;
 	std::vector<IServerExtension *>	_extensions;
 	time_t						_lastPingCheck;
