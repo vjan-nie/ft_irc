@@ -193,6 +193,10 @@ void Server::run()
 		time_t now = std::time(NULL);
 		for (size_t i = 0; i < _extensions.size(); ++i)
 			_extensions[i]->onTick(*this, now);
+
+		for (std::map<int, Client *>::iterator it = _clients.begin();
+			 it != _clients.end(); ++it)
+			updateEpollInterest(it->second);
 	}
 }
 
@@ -264,7 +268,8 @@ void Server::acceptClient()
 	}
 	_clients[clientFd] = client;
 
-	addToEpoll(clientFd, EPOLLIN | EPOLLOUT);
+	addToEpoll(clientFd, EPOLLIN);
+	_epollMask[clientFd] = EPOLLIN;
 
 	Log::info("new connection from " + hostname
 			  + " (fd " + libcpp::str::to_string(clientFd) + ")");
@@ -337,6 +342,17 @@ void Server::handleMessage(Client *client, const std::string &raw)
 		return;
 
 	dispatchCommand(client, msg);
+}
+
+void Server::updateEpollInterest(Client *client)
+{
+	int fd = client->getFd();
+	uint32_t want = EPOLLIN | (client->hasPendingData() ? EPOLLOUT : 0u);
+	std::map<int, uint32_t>::iterator it = _epollMask.find(fd);
+	if (it != _epollMask.end() && it->second == want)
+		return;
+	modifyEpoll(fd, want);
+	_epollMask[fd] = want;
 }
 
 void Server::checkTimeouts()
@@ -487,6 +503,7 @@ void Server::disconnectClient(int fd, const std::string &reason)
 		send(fd, pending.c_str(), pending.size(), 0);
 	}
 
+	_epollMask.erase(fd);
 	removeFromEpoll(fd);
 	close(fd);
 	Log::info("client disconnected: " + client->getNickname()
