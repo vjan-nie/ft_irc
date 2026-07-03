@@ -230,11 +230,7 @@ void Server::acceptClient()
 						  reinterpret_cast<struct sockaddr *>(&clientAddr),
 						  &addrLen);
 	if (clientFd < 0)
-	{
-		if (errno != EAGAIN && errno != EWOULDBLOCK)
-			Log::error(std::string("accept() failed: ") + strerror(errno));
 		return;
-	}
 
 	// Connection cap: reject gracefully instead of exhausting fds
 	if (_clients.size() >= MAX_CLIENTS)
@@ -286,7 +282,7 @@ void Server::handleClientInput(int fd)
 	ssize_t bytesRead = recv(fd, buf, MAX_MSGLEN, 0);
 	if (bytesRead <= 0)
 	{
-		if (bytesRead == 0 || (errno != EAGAIN && errno != EWOULDBLOCK))
+		if (bytesRead == 0)
 			disconnectClient(fd, "Connection closed");
 		return;
 	}
@@ -322,11 +318,7 @@ void Server::handleClientOutput(int fd)
 	const std::string &buf = client->getSendBuffer();
 	ssize_t bytesSent = send(fd, buf.c_str(), buf.size(), 0);
 	if (bytesSent < 0)
-	{
-		if (errno != EAGAIN && errno != EWOULDBLOCK)
-			disconnectClient(fd, "Send error");
 		return;
-	}
 	client->clearSendBuffer(bytesSent);
 
 	// SendQ sweep: the peer is too slow / flooded; its stream already

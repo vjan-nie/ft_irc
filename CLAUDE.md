@@ -70,3 +70,15 @@ Dispatch enforces a **registration gate**: only CAP/PASS/NICK/USER/QUIT/PONG run
 ## Testing
 
 Tests use Google Test but also feed every result into **PostMan** (`vendor/PostMan.cpp`), a styled Unicode-table reporter — `tests/test_main.cpp` bridges the two via a custom `TestEventListener`. `tests/Makefile` builds all of `src/` *except* `main.cpp` (linking `tier_full.cpp` as the one `registerExtensions` definition). Protocol-level suites share `tests/TestHarness.hpp` (TCP `TestClient` + `IrcServerTest` fixture; subclass and override `portBase()` per suite, `onServerReady()` to inject probe extensions). Test files: `test_message`, `test_client`, `test_channel`, `test_bot`, `test_integration`, `test_robustness`, `test_security`, `test_filetransfer`, `test_extensions`, `test_libcpp98`. Suite is 138/138; PostMan's leak counter is atomic and `assertNoLeaks` takes `const char*` (a `std::string` argument would count itself as a leak — keep it that way).
+
+## Known traps
+
+- **RST/error teardown**: real socket errors (`ECONNRESET`, etc.) are torn down
+  via the `EPOLLERR|EPOLLHUP` branch in `run()`, **not** by inspecting `errno`
+  after `recv`/`send` — that was removed (the subject forbids errno-driven
+  control flow after non-blocking I/O syscalls; it also cured a latent EINTR
+  false-positive disconnect). Caveat for future event-loop work: which branch
+  reaps an RST is **timing-dependent** when `EPOLLIN` and `EPOLLHUP` arrive in
+  the same event — do NOT assume `EPOLLERR|HUP` alone covered RST before that
+  errno removal (`RobustnessTest.AbruptDisconnectViaRST` guards it now).
+  
