@@ -144,6 +144,61 @@ TEST_F(RobustnessTest, AbruptDisconnect)
 	close(fd2);
 }
 
+TEST_F(RobustnessTest, AbruptDisconnectViaRST)
+{
+	/* Connect, register, then force a real RST (not a FIN) via SO_LINGER */
+	int fd = quickConnect(serverPort);
+	ASSERT_GE(fd, 0);
+
+	const std::string nick = "abruptrst";
+	sendLine(fd, "PASS robpass");
+	sendLine(fd, "NICK " + nick);
+	sendLine(fd, "USER abruptrst 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fd);
+
+	struct linger sl;
+	sl.l_onoff = 1;
+	sl.l_linger = 0;
+	setsockopt(fd, SOL_SOCKET, SO_LINGER, &sl, sizeof(sl));
+	close(fd);
+
+	/*
+	 * Black-box proof the reset client was actually torn down server-side
+	 * (not just that the listener still accepts): register a NEW client
+	 * reusing the SAME nick. Nick release depends on the server processing
+	 * EPOLLERR|HUP for the RST, which is not synchronous with our close()
+	 * — bounded retry instead of a fixed sleep: up to 15 attempts, 100ms
+	 * apart (1.5s total margin). Each attempt reconnects on a fresh socket
+	 * and sends a full PASS/NICK/USER handshake, so the test makes no
+	 * assumption about partial-registration or NICK-only retry semantics
+	 * — success is simply seeing RPL_WELCOME (001) for that attempt.
+	 */
+	const int MAX_ATTEMPTS = 15;
+	bool registered = false;
+	std::string lastReply;
+
+	for (int attempt = 0; attempt < MAX_ATTEMPTS && !registered; ++attempt)
+	{
+		int fd2 = quickConnect(serverPort);
+		ASSERT_GE(fd2, 0);
+
+		sendLine(fd2, "PASS robpass");
+		sendLine(fd2, "NICK " + nick);
+		sendLine(fd2, "USER abruptrst2 0 * :Test");
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		lastReply = recvBuf(fd2);
+
+		registered = lastReply.find(" 001 ") != std::string::npos;
+		close(fd2);
+	}
+
+	EXPECT_TRUE(registered)
+		<< "Nick '" << nick << "' should be released after RST within "
+		<< MAX_ATTEMPTS << " retries (100ms apart); last reply: '"
+		<< lastReply << "'";
+}
+
 /* ════════════════════════════════════════════════════════════════════════
  * Suite: Robustness — Rapid connect / disconnect
  * ════════════════════════════════════════════════════════════════════ */
