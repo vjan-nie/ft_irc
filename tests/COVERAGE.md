@@ -61,7 +61,7 @@ FancyLogSink, shrinking the surface an evaluator can question.
 | Sheet item | Status | Proven by | Notes / gap |
 |---|---|---|---|
 | Operator CAN: KICK / INVITE / TOPIC / MODE i,t,k,o,l | ✅ | `Integration.KickUser/InviteToChannel/TopicSetAndQuery/ChannelMode{Query,Key,Limit}`; `Channel.*Mode*`; `ModeBounds*` | Happy path well covered |
-| **Regular user is DENIED operator actions** | 🔴 | — | **GAP.** Sheet explicitly checks this. No negative test asserting `ERR_CHANOPRIVSNEEDED (482)` for non-op KICK/TOPIC/MODE/INVITE |
+| **Regular user is DENIED operator actions** | ✅ | `Integration.KickDeniedForNonOperator/ModeDeniedForNonOperator/TopicDeniedForNonOperatorWhenRestricted/TopicAllowedForNonOperatorWhenNotRestricted/InviteDeniedForNonOperatorWhenInviteOnly/InviteAllowedForNonOperatorWhenNotInviteOnly` | Negative tests assert `ERR_CHANOPRIVSNEEDED (482)` for non-op KICK/MODE/TOPIC(+t)/INVITE(+i); positive tests confirm TOPIC/INVITE still succeed for non-op when the channel isn't restricted |
 | +i / +t enforced end-to-end (uninvited JOIN blocked; non-op TOPIC blocked) | 🟡 | mode *state* tested at unit level | Enforcement path not asserted end-to-end via TCP |
 
 ---
