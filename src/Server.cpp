@@ -235,11 +235,12 @@ void Server::acceptClient()
 	// Connection cap: reject gracefully instead of exhausting fds
 	if (_clients.size() >= MAX_CLIENTS)
 	{
-		const char rejection[] = "ERROR :Server full\r\n";
-		send(clientFd, rejection, sizeof(rejection) - 1, 0); // best effort
-		close(clientFd);
-		Log::warn("connection rejected: MAX_CLIENTS reached");
-		return;
+	    /* Reject by closing only — no unpolled send() here either (T3, same rule
+	    ** as the removed disconnect flush). A courtesy "Server full" line would
+	    ** need the deferred-teardown machinery tracked as T4. */
+	    close(clientFd);
+	    Log::warn("connection rejected: MAX_CLIENTS reached");
+	    return;
 	}
 
 	// Set non-blocking
@@ -485,15 +486,6 @@ void Server::disconnectClient(int fd, const std::string &reason)
 
 	for (size_t i = 0; i < _extensions.size(); ++i)
 		_extensions[i]->onClientDisconnect(*this, *client, reason);
-
-	// Best-effort flush of replies queued before this disconnect (e.g. the
-	// 001-005 burst when the client QUITs immediately after registering).
-	// Single non-blocking send; whatever the kernel refuses is dropped.
-	if (client->hasPendingData())
-	{
-		const std::string &pending = client->getSendBuffer();
-		send(fd, pending.c_str(), pending.size(), 0);
-	}
 
 	_epollMask.erase(fd);
 	removeFromEpoll(fd);
