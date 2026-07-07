@@ -45,11 +45,18 @@ TEST_F(IntegrationTest, WrongPassword)
 	tc.sendCmd("USER wrongpw 0 * :Test");
 	std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
-	std::string reply = tc.recvAll();
-	/* Server queues 464 but may disconnect before flushing.
-	   Either we see 464 or the connection was simply closed. */
-	EXPECT_TRUE(reply.empty() || tc.hasNumeric(reply, "464"))
-		<< "Expected either ERR_PASSWDMISMATCH or closed connection";
+	/* T3 (Option A): disconnectClient() no longer drains _out before
+	   close(fd). sendReply(464) and disconnectClient() are called
+	   synchronously in the same path (completeRegistration) with no
+	   epoll_wait in between, so the 464 structurally never arrives.
+	   Deterministic contract: zero bytes delivered and the connection
+	   closed (EOF) -- recv() checked for n == 0 rather than recvAll(),
+	   which can't distinguish EOF from a timeout on a still-open socket. */
+	char buf[64];
+	ssize_t n = recv(tc.fd(), buf, sizeof(buf), 0);
+	EXPECT_EQ(n, 0)
+		<< "Expected connection closed with zero bytes delivered "
+		   "(464 is queued but never flushed before close)";
 }
 
 TEST_F(IntegrationTest, NoPassword)
@@ -61,9 +68,13 @@ TEST_F(IntegrationTest, NoPassword)
 	tc.sendCmd("USER nopw 0 * :Test");
 	std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
-	std::string reply = tc.recvAll();
-	EXPECT_TRUE(reply.empty() || tc.hasNumeric(reply, "464"))
-		<< "Expected either ERR_PASSWDMISMATCH or closed connection";
+	/* Same path as WrongPassword (!hasPassSent() hits the same branch in
+	   completeRegistration) -- same deterministic contract. */
+	char buf[64];
+	ssize_t n = recv(tc.fd(), buf, sizeof(buf), 0);
+	EXPECT_EQ(n, 0)
+		<< "Expected connection closed with zero bytes delivered "
+		   "(464 is queued but never flushed before close)";
 }
 
 TEST_F(IntegrationTest, UnregisteredCommand)

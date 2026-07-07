@@ -2,7 +2,7 @@
 
 Cross-references every item on the 42 evaluation sheet against what the repo
 actually proves today. Built from a scan of `tests/`, `scripts/audit.sh`, and
-`src/` on `main` (`4e78d69`).
+`src/`, current as of the T1–T3 kernel-compliance work.
 
 **Legend:** ✅ covered · 🟡 partial · 🔴 gap / risk · 🧭 manual-only (not automatable)
 
@@ -17,8 +17,8 @@ FancyLogSink, shrinking the surface an evaluator can question.
 |---|---|---|---|
 | Makefile; compiles `-Wall -Wextra -Werror -std=c++98`; exec `ircserv` | ✅ | `audit.sh` §compile | Also `make mandatory/bonus/full` all build |
 | **Only one** poll/epoll/select | ✅ | `audit.sh` §single-poll; verified 1 `epoll_wait` (Server.cpp:158) | PlatformBus multiplexes into the same epoll — no 2nd wait |
-| poll called before each accept/recv/send | 🟡 | architectural (all I/O is epoll-event-driven) | **Exception:** best-effort `send()` in `disconnectClient` (Server.cpp:503) is not preceded by a write event → decide defend vs remove |
-| **errno not used to trigger action after recv/send/accept** | 🔴 | — (unaudited, untested) | **TOP RISK.** `errno==EAGAIN` checks after recv (289), send (326), accept (234). No retry-loop, but errno branches control flow. Refactor recommended (EPOLLERR/HUP already handles real errors) |
+| poll called before each accept/recv/send | ✅ | architectural (all I/O is epoll-event-driven) | **Resolved (T3):** both unpolled best-effort sends removed (`disconnectClient` flush + `acceptClient` "Server full") — zero exceptions remain in the kernel |
+| **errno not used to trigger action after recv/send/accept** | ✅ | `RobustnessTest.AbruptDisconnectViaRST` | **Resolved (T2):** errno branching removed from recv/send/accept; real errors reaped by the `EPOLLERR\|EPOLLHUP` branch in `run()`. Also cured a latent `EINTR` false-positive disconnect |
 | fcntl only `F_SETFL, O_NONBLOCK` | ✅ | `audit.sh` §fcntl; verified (Server.cpp:104,250) | PlatformBus fcntl also compliant, but it's an extra |
 
 ---
@@ -87,11 +87,16 @@ FancyLogSink, shrinking the surface an evaluator can question.
 ## Prioritized action list (defense order)
 
 **P0 — eliminatory, do first (a gap here = 0, everything else is moot):**
-1. **errno-after-I/O** (A). Audit → refactor recv/send/accept to not branch on
-   `errno` (rely on `EPOLLERR|EPOLLHUP`), or prepare an airtight justification.
-   Guard: `Robustness.AbruptDisconnect` must stay green.
-2. **Un-polled `send()` in `disconnectClient`** (A/B). Decide: remove (accept
-   losing app-buffered QUIT/ERROR text) or defend as a teardown flush.
+1. ✅ **errno-after-I/O** (A) — resolved (T2): errno branching removed from
+   recv/send/accept; real errors handled by the `EPOLLERR|EPOLLHUP` branch.
+   Guard: `RobustnessTest.AbruptDisconnectViaRST`.
+2. ✅ **Un-polled `send()` in `disconnectClient`** — resolved via Option A
+   (T3): the flush was removed, closing the last literal exception to
+   "poll before every send" in the kernel. Accepted regression: 464 /
+   welcome-burst no longer reach a client disconnected in the same tick
+   they were queued (see `CLAUDE.md` "Known traps"). Deferred-teardown
+   recovery (Option C) is tracked as future work (T4), out of this plan's
+   scope.
 
 **P1 — scored / high-value robustness:**
 3. **Non-operator denial tests** (E) — the operator score is 0–5 and the sheet
