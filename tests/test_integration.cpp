@@ -266,6 +266,223 @@ TEST_F(IntegrationTest, InviteToChannel)
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+ * Suite: ServerIntegration — Operator commands (permission checks)
+ * ════════════════════════════════════════════════════════════════════ */
+
+TEST_F(IntegrationTest, KickDeniedForNonOperator)
+{
+	TestClient op, member;
+	ASSERT_TRUE(op.connect(serverPort));
+	ASSERT_TRUE(member.connect(serverPort));
+
+	op.registerClient("testpass", "kdop", "kdop");
+	member.registerClient("testpass", "kdmem", "kdmem");
+	op.recvAll();
+	member.recvAll();
+
+	op.sendCmd("JOIN #kickdenied");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+
+	member.sendCmd("JOIN #kickdenied");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+	member.recvAll();
+
+	/* Non-operator attempts to KICK the operator */
+	member.sendCmd("KICK #kickdenied kdop :bye");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	std::string mr = member.recvAll();
+	EXPECT_TRUE(member.hasNumeric(mr, "482"))
+		<< "Non-operator KICK should be denied with ERR_CHANOPRIVSNEEDED";
+
+	op.sendCmd("QUIT");
+	member.sendCmd("QUIT");
+}
+
+TEST_F(IntegrationTest, ModeDeniedForNonOperator)
+{
+	TestClient op, member;
+	ASSERT_TRUE(op.connect(serverPort));
+	ASSERT_TRUE(member.connect(serverPort));
+
+	op.registerClient("testpass", "mdop", "mdop");
+	member.registerClient("testpass", "mdmem", "mdmem");
+	op.recvAll();
+	member.recvAll();
+
+	op.sendCmd("JOIN #modedenied");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+
+	member.sendCmd("JOIN #modedenied");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+	member.recvAll();
+
+	/* +t is the representative flag: handleChannelMode gates i,t,k,o,l
+	 * behind a single isOperator() check (CommandOperator.cpp:294) — the
+	 * gate isn't per-flag, so testing the other flags would be redundant. */
+	member.sendCmd("MODE #modedenied +t");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	std::string mr = member.recvAll();
+	EXPECT_TRUE(member.hasNumeric(mr, "482"))
+		<< "Non-operator MODE should be denied with ERR_CHANOPRIVSNEEDED";
+
+	op.sendCmd("QUIT");
+	member.sendCmd("QUIT");
+}
+
+TEST_F(IntegrationTest, TopicDeniedForNonOperatorWhenRestricted)
+{
+	TestClient op, member;
+	ASSERT_TRUE(op.connect(serverPort));
+	ASSERT_TRUE(member.connect(serverPort));
+
+	op.registerClient("testpass", "tdop", "tdop");
+	member.registerClient("testpass", "tdmem", "tdmem");
+	op.recvAll();
+	member.recvAll();
+
+	op.sendCmd("JOIN #topicdenied");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+
+	member.sendCmd("JOIN #topicdenied");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+	member.recvAll();
+
+	op.sendCmd("MODE #topicdenied +t");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+	member.recvAll();
+
+	member.sendCmd("TOPIC #topicdenied :hijacked");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	std::string mr = member.recvAll();
+	EXPECT_TRUE(member.hasNumeric(mr, "482"))
+		<< "Non-operator TOPIC should be denied with ERR_CHANOPRIVSNEEDED when +t is set";
+
+	op.sendCmd("QUIT");
+	member.sendCmd("QUIT");
+}
+
+TEST_F(IntegrationTest, TopicAllowedForNonOperatorWhenNotRestricted)
+{
+	TestClient op, member;
+	ASSERT_TRUE(op.connect(serverPort));
+	ASSERT_TRUE(member.connect(serverPort));
+
+	op.registerClient("testpass", "taop", "taop");
+	member.registerClient("testpass", "tamem", "tamem");
+	op.recvAll();
+	member.recvAll();
+
+	op.sendCmd("JOIN #topicallowed");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+
+	member.sendCmd("JOIN #topicallowed");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+	member.recvAll();
+
+	/* No +t set: TOPIC is unrestricted, any member may set it */
+	member.sendCmd("TOPIC #topicallowed :allowed topic");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	std::string mr = member.recvAll();
+	/* Command already sent — if the signal hasn't arrived yet, drain a
+	 * second short window rather than resend, to close the race without
+	 * assuming a fixed round-trip latency. */
+	if (mr.find("allowed topic") == std::string::npos)
+		mr += member.recvAll(200);
+	EXPECT_NE(mr.find("allowed topic"), std::string::npos)
+		<< "Non-operator TOPIC should be applied and propagated when +t is not set";
+	EXPECT_FALSE(member.hasNumeric(mr, "482"));
+
+	op.sendCmd("QUIT");
+	member.sendCmd("QUIT");
+}
+
+TEST_F(IntegrationTest, InviteDeniedForNonOperatorWhenInviteOnly)
+{
+	TestClient op, member;
+	ASSERT_TRUE(op.connect(serverPort));
+	ASSERT_TRUE(member.connect(serverPort));
+
+	op.registerClient("testpass", "idop", "idop");
+	member.registerClient("testpass", "idmem", "idmem");
+	op.recvAll();
+	member.recvAll();
+
+	op.sendCmd("JOIN #invdenied");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+
+	member.sendCmd("JOIN #invdenied");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+	member.recvAll();
+
+	op.sendCmd("MODE #invdenied +i");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+	member.recvAll();
+
+	/* Non-operator attempts to INVITE; target need not exist — the 482
+	 * gate fires before findClientByNick (CommandOperator.cpp:110-117) */
+	member.sendCmd("INVITE idghost #invdenied");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	std::string mr = member.recvAll();
+	EXPECT_TRUE(member.hasNumeric(mr, "482"))
+		<< "Non-operator INVITE should be denied with ERR_CHANOPRIVSNEEDED when +i is set";
+
+	op.sendCmd("QUIT");
+	member.sendCmd("QUIT");
+}
+
+TEST_F(IntegrationTest, InviteAllowedForNonOperatorWhenNotInviteOnly)
+{
+	TestClient op, member, guest;
+	ASSERT_TRUE(op.connect(serverPort));
+	ASSERT_TRUE(member.connect(serverPort));
+	ASSERT_TRUE(guest.connect(serverPort));
+
+	op.registerClient("testpass", "iaop", "iaop");
+	member.registerClient("testpass", "iamem", "iamem");
+	guest.registerClient("testpass", "iaguest", "iaguest");
+	op.recvAll();
+	member.recvAll();
+	guest.recvAll();
+
+	op.sendCmd("JOIN #invallowed");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+
+	member.sendCmd("JOIN #invallowed");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+	member.recvAll();
+
+	/* No +i set: INVITE is unrestricted, any member may invite */
+	member.sendCmd("INVITE iaguest #invallowed");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	std::string mr = member.recvAll();
+	/* Command already sent — drain once more instead of resending if the
+	 * numeric hasn't landed yet, closing the race without a fixed sleep. */
+	if (!member.hasNumeric(mr, "341"))
+		mr += member.recvAll(200);
+	EXPECT_TRUE(member.hasNumeric(mr, "341"))
+		<< "Non-operator INVITE should succeed (RPL_INVITING) when +i is not set";
+	EXPECT_FALSE(member.hasNumeric(mr, "482"));
+
+	op.sendCmd("QUIT");
+	member.sendCmd("QUIT");
+	guest.sendCmd("QUIT");
+}
+
+/* ════════════════════════════════════════════════════════════════════════
  * Suite: ServerIntegration — Modes
  * ════════════════════════════════════════════════════════════════════ */
 
