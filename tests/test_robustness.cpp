@@ -571,7 +571,7 @@ TEST_F(RobustnessTest, ServerSurvivesFloodAgainstFrozenReader)
 	std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	recvBuf(fdB);
 
-	const int FLOOD_LINES = 1000;
+	const int FLOOD_LINES = 200000;
 	for (int i = 0; i < FLOOD_LINES; ++i)
 		sendLine(fdB, "PRIVMSG #flood2 :msg-" + std::to_string(i));
 
