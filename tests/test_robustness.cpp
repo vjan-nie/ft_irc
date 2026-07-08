@@ -466,3 +466,206 @@ TEST_F(RobustnessTest, NoLeakAfterClientChurn)
 
 	ASSERT_NO_LEAKS("client churn should not leak memory");
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Suite: Robustness — Frozen reader + channel flood (T6)
+ *
+ * A client that stops reading its socket ("frozen reader") while a channel
+ * it's in gets flooded by another member must not affect a third,
+ * unrelated client, and the server must not crash. See
+ * .claude/workflow/tasks/T6-frozen-reader-flood/01-audit.md for the
+ * source/behavioral audit backing these three tests — none of them assert
+ * an exact byte or line cutoff, since the SendQ-disconnect boundary is an
+ * OS socket-buffer artifact, not a value ft_irc controls.
+ * ════════════════════════════════════════════════════════════════════ */
+
+TEST_F(RobustnessTest, ThirdClientUnaffectedByFrozenReaderFlood)
+{
+	/* A: the frozen reader — registers, joins, then never recv()s again */
+	int fdA = quickConnect(serverPort);
+	ASSERT_GE(fdA, 0);
+	sendLine(fdA, "PASS robpass");
+	sendLine(fdA, "NICK frozenA");
+	sendLine(fdA, "USER frozenA 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fdA);
+	sendLine(fdA, "JOIN #flood1");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	recvBuf(fdA);
+	/* fdA is never read again below this point */
+
+	/* B: the flooder */
+	int fdB = quickConnect(serverPort);
+	ASSERT_GE(fdB, 0);
+	sendLine(fdB, "PASS robpass");
+	sendLine(fdB, "NICK frozenB");
+	sendLine(fdB, "USER frozenB 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fdB);
+	sendLine(fdB, "JOIN #flood1");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	recvBuf(fdB);
+
+	/* C: the control client whose responsiveness is actually asserted */
+	int fdC = quickConnect(serverPort);
+	ASSERT_GE(fdC, 0);
+	sendLine(fdC, "PASS robpass");
+	sendLine(fdC, "NICK frozenC");
+	sendLine(fdC, "USER frozenC 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fdC);
+
+	const int FLOOD_LINES = 200000;   // ~0.5s of real backpressure, overlaps C's probe
+	std::thread floodThread([fdB]() {
+		for (int i = 0; i < FLOOD_LINES; ++i)
+			sendLine(fdB, "PRIVMSG #flood1 :msg-" + std::to_string(i));
+	});
+
+	/* Bounded-retry PING/PONG probe against C overlapping B's flood thread
+	 * — keeps firing until a PONG lands or the deadline expires, so it
+	 * isn't racing the flood's exact timing. */
+	bool gotPong = false;
+	std::string lastReply;
+	const int MAX_PROBES = 30;
+	for (int attempt = 0; attempt < MAX_PROBES && !gotPong; ++attempt)
+	{
+		sendLine(fdC, "PING :isolation-check");
+		lastReply = recvBuf(fdC, 200);
+		gotPong = lastReply.find("PONG") != std::string::npos;
+	}
+
+	floodThread.join();
+
+	EXPECT_TRUE(gotPong)
+		<< "Client C should get a timely PONG even while A is a frozen "
+		   "reader and B is flooding the shared channel; last reply: '"
+		<< lastReply << "'";
+
+	close(fdA);
+	close(fdB);
+	close(fdC);
+}
+
+TEST_F(RobustnessTest, ServerSurvivesFloodAgainstFrozenReader)
+{
+	int fdA = quickConnect(serverPort);
+	ASSERT_GE(fdA, 0);
+	sendLine(fdA, "PASS robpass");
+	sendLine(fdA, "NICK survA");
+	sendLine(fdA, "USER survA 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fdA);
+	sendLine(fdA, "JOIN #flood2");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	recvBuf(fdA);
+	/* fdA is never read again below this point */
+
+	int fdB = quickConnect(serverPort);
+	ASSERT_GE(fdB, 0);
+	sendLine(fdB, "PASS robpass");
+	sendLine(fdB, "NICK survB");
+	sendLine(fdB, "USER survB 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fdB);
+	sendLine(fdB, "JOIN #flood2");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	recvBuf(fdB);
+
+	const int FLOOD_LINES = 1000;
+	for (int i = 0; i < FLOOD_LINES; ++i)
+		sendLine(fdB, "PRIVMSG #flood2 :msg-" + std::to_string(i));
+
+	/* Bounded-retry registration of a brand-new client D, same shape as
+	 * AbruptDisconnectViaRST: keep trying until 001 shows up. */
+	const int MAX_ATTEMPTS = 15;
+	bool registered = false;
+	std::string lastReply;
+	for (int attempt = 0; attempt < MAX_ATTEMPTS && !registered; ++attempt)
+	{
+		int fdD = quickConnect(serverPort);
+		ASSERT_GE(fdD, 0);
+		sendLine(fdD, "PASS robpass");
+		sendLine(fdD, "NICK survD");
+		sendLine(fdD, "USER survD 0 * :Test");
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		lastReply = recvBuf(fdD);
+		registered = lastReply.find(" 001 ") != std::string::npos;
+		close(fdD);
+	}
+
+	EXPECT_TRUE(registered)
+		<< "A new client should still be able to register (001) after a "
+		   "flood targeting a frozen reader; last reply: '" << lastReply
+		<< "'";
+
+	close(fdA);
+	close(fdB);
+}
+
+TEST_F(RobustnessTest, FrozenReaderEventuallyDisconnectedOnSendQ)
+{
+	/* Heaviest test in the suite: sends ~12 MB to push a frozen reader past
+	 * both this machine's real OS socket-buffer ceiling and the 64 KiB
+	 * MAX_SENDQ latch. The exact byte count at which the disconnect fires
+	 * is environment-dependent (see
+	 * .claude/workflow/tasks/T6-frozen-reader-flood/01-audit.md) — this
+	 * flood volume carries a wide safety margin (~6x) over the ~1.88 MB
+	 * ceiling measured on the audit machine, not tuned to it. */
+	int fdA = quickConnect(serverPort);
+	ASSERT_GE(fdA, 0);
+	sendLine(fdA, "PASS robpass");
+	sendLine(fdA, "NICK cutA");
+	sendLine(fdA, "USER cutA 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fdA);
+	sendLine(fdA, "JOIN #flood3");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	recvBuf(fdA);
+	/* fdA is never read again below this point */
+
+	int fdB = quickConnect(serverPort);
+	ASSERT_GE(fdB, 0);
+	sendLine(fdB, "PASS robpass");
+	sendLine(fdB, "NICK cutB");
+	sendLine(fdB, "USER cutB 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fdB);
+	sendLine(fdB, "JOIN #flood3");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	recvBuf(fdB);
+
+	const int FLOOD_LINES = 30000;
+	const std::string payload(400, 'A'); /* line ~419B, under the 512B input cap */
+	for (int i = 0; i < FLOOD_LINES; ++i)
+		sendLine(fdB, "PRIVMSG #flood3 :" + payload);
+
+	/* Bounded wait for A's socket to be closed server-side: keep recv()ing
+	 * (draining whatever backlog already arrived) until EOF (n == 0), with
+	 * a generous but finite safety-net deadline so a hypothetical
+	 * environment whose OS buffers absorb the whole flood fails this test
+	 * cleanly instead of hanging the suite. */
+	struct timeval tv;
+	tv.tv_sec = 0;
+	tv.tv_usec = 200 * 1000;
+	setsockopt(fdA, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+	bool closed = false;
+	const std::chrono::steady_clock::time_point deadline =
+		std::chrono::steady_clock::now() + std::chrono::seconds(20);
+	char buf[4096];
+	while (std::chrono::steady_clock::now() < deadline)
+	{
+		ssize_t n = recv(fdA, buf, sizeof(buf), 0);
+		if (n == 0) { closed = true; break; }
+		/* n < 0: timeout, keep polling. n > 0: still draining backlog. */
+	}
+
+	EXPECT_TRUE(closed)
+		<< "Frozen reader A should eventually be disconnected once a large "
+		   "enough flood (" << FLOOD_LINES << " lines, ~"
+		<< (FLOOD_LINES * (payload.size() + 19)) / (1024 * 1024)
+		<< " MB) exceeds real OS + MAX_SENDQ backpressure";
+
+	close(fdA);
+	close(fdB);
+}
