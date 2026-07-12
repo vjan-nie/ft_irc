@@ -83,4 +83,12 @@ Tests use Google Test but also feed every result into **PostMan** (`vendor/PostM
   errno removal (`RobustnessTest.AbruptDisconnectViaRST` guards it now).
 - **No flush-on-disconnect**: `disconnectClient()` closes the fd without a
   final best-effort `send()` of whatever is still queued in `_out` — two unpolled best-effort send()s were removed (T3): the flush in disconnectClient() and the MAX_CLIENTS "Server full" rejection in acceptClient(). The kernel now has no send() outside the EPOLLOUT-gated path in handleClientOutput(). Known accepted regressions: ERR_PASSWDMISMATCH (464) / the 001-005 burst on immediate post-registration QUIT, and the "Server full" ERROR when at MAX_CLIENTS, no longer reach the client (socket closes with zero bytes). Compliant recovery = deferred teardown (T4).
+  - **SIGPIPE in the test harness**: `tests/` does NOT link `main.cpp`, so the
+  `signal(SIGPIPE, SIG_IGN)` that `ircserv` installs never ran in
+  `test_runner` — the test process had a different signal disposition than
+  the shipped binary. A server-side `send()` to a socket a test had already
+  `close()`d, while a large SendQ was still pending for it, killed the whole
+  process with SIGPIPE (exit 141). Now installed in `tests/test_main.cpp`.
+  Keep it there; it is a property of the process, not of any one fixture.
+- Autodeterminded flood; overlap is structural, not a race; don't return it as fixed FLOOD_LINES.
   

@@ -16,6 +16,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <atomic>
 
 /* ──────────────────────────────────────────────────────────────────
  * Helpers
@@ -465,4 +466,275 @@ TEST_F(RobustnessTest, NoLeakAfterClientChurn)
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
 	ASSERT_NO_LEAKS("client churn should not leak memory");
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Suite: Robustness — Frozen reader + channel flood (T6)
+ *
+ * A client that stops reading its socket ("frozen reader") while a channel
+ * it's in gets flooded by another member must not affect a third,
+ * unrelated client, and the server must not crash. See
+ * .claude/workflow/tasks/T6-frozen-reader-flood/01-audit.md for the
+ * source/behavioral audit backing these three tests — none of them assert
+ * an exact byte or line cutoff, since the SendQ-disconnect boundary is an
+ * OS socket-buffer artifact, not a value ft_irc controls.
+ * ════════════════════════════════════════════════════════════════════ */
+
+TEST_F(RobustnessTest, ThirdClientUnaffectedByFrozenReaderFlood)
+{
+	/* A: the frozen reader — registers, joins, then never recv()s again */
+	int fdA = quickConnect(serverPort);
+	ASSERT_GE(fdA, 0);
+	sendLine(fdA, "PASS robpass");
+	sendLine(fdA, "NICK frozenA");
+	sendLine(fdA, "USER frozenA 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fdA);
+	sendLine(fdA, "JOIN #flood1");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	recvBuf(fdA);
+	/* fdA is never read again below this point */
+
+	/* B: the flooder */
+	int fdB = quickConnect(serverPort);
+	ASSERT_GE(fdB, 0);
+	sendLine(fdB, "PASS robpass");
+	sendLine(fdB, "NICK frozenB");
+	sendLine(fdB, "USER frozenB 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fdB);
+	sendLine(fdB, "JOIN #flood1");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	recvBuf(fdB);
+
+	/* C: the control client whose responsiveness is actually asserted */
+	int fdC = quickConnect(serverPort);
+	ASSERT_GE(fdC, 0);
+	sendLine(fdC, "PASS robpass");
+	sendLine(fdC, "NICK frozenC");
+	sendLine(fdC, "USER frozenC 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fdC);
+
+	/* The flood runs until the probe loop says stop, not for a fixed line
+	 * count. A fixed volume makes the overlap a race: the flood has to
+	 * happen to last longer than the probes on every machine — exactly the
+	 * assumption that passed locally and failed in the CI container for
+	 * ServerSurvivesFloodAgainstFrozenReader. Here the flood is
+	 * self-terminating, so the probe window is STRUCTURALLY inside it.
+	 *
+	 * FLOOD_CAP only bounds the test if the probes never complete; it is a
+	 * safety net, not a tuned value. */
+	const int FLOOD_CAP = 2000000;
+	std::atomic<bool> stopFlood(false);
+	std::thread floodThread([fdB, &stopFlood]() {
+		for (int i = 0; i < FLOOD_CAP && !stopFlood; ++i)
+			sendLine(fdB, "PRIVMSG #flood1 :msg-" + std::to_string(i));
+	});
+
+	/* C must stay responsive for the WHOLE probe window while A is a frozen
+	 * reader and B floods the shared channel. The bar is "never goes silent
+	 * for a stretch" (maxStreak), not "zero late replies" — a single missed
+	 * round is jitter above recvBuf's 50ms timeout, whereas a server
+	 * blocking on the frozen reader would miss every round for a long run. */
+	const int PROBE_ROUNDS = 10;
+	int pongs = 0;
+	int maxStreak = 0;
+	int streak = 0;
+	std::string lastReply;
+	for (int i = 0; i < PROBE_ROUNDS; ++i)
+	{
+		sendLine(fdC, "PING :isolation-check");
+		lastReply = recvBuf(fdC, 50);
+		if (lastReply.find("PONG") != std::string::npos)
+		{
+			++pongs;
+			streak = 0;
+		}
+		else
+		{
+			++streak;
+			if (streak > maxStreak)
+				maxStreak = streak;
+		}
+	}
+
+	stopFlood = true;
+	floodThread.join();
+
+	close(fdA);
+	close(fdB);
+	close(fdC);
+
+	EXPECT_GT(pongs, 0)
+		<< "Client C got no PONG at all during the flood";
+
+	EXPECT_LE(maxStreak, 2)
+		<< "Client C went " << maxStreak << " consecutive probe rounds "
+		   "without a PONG while A is a frozen reader and B floods the "
+		   "shared channel — that is loss of service, not jitter (" << pongs
+		<< "/" << PROBE_ROUNDS << " answered); last reply: '" << lastReply
+		<< "'";
+}
+
+TEST_F(RobustnessTest, ServerSurvivesFloodAgainstFrozenReader)
+{
+	int fdA = quickConnect(serverPort);
+	ASSERT_GE(fdA, 0);
+	sendLine(fdA, "PASS robpass");
+	sendLine(fdA, "NICK survA");
+	sendLine(fdA, "USER survA 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fdA);
+	sendLine(fdA, "JOIN #flood2");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	recvBuf(fdA);
+	/* fdA is never read again below this point */
+
+	int fdB = quickConnect(serverPort);
+	ASSERT_GE(fdB, 0);
+	sendLine(fdB, "PASS robpass");
+	sendLine(fdB, "NICK survB");
+	sendLine(fdB, "USER survB 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fdB);
+	sendLine(fdB, "JOIN #flood2");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	recvBuf(fdB);
+
+	/* The flood runs until the test tells it to stop, rather than for a
+	 * fixed line count that has to be tuned to outrace D's registration on
+	 * every machine. A fixed volume is a race by construction: it passed
+	 * locally (~200k lines ≈ 0.5s) and failed in the CI container, where
+	 * the same flood drained before D got its 001. Letting the flood run
+	 * until D registers makes the overlap STRUCTURAL — D cannot possibly
+	 * register outside an in-flight flood — instead of probabilistic.
+	 *
+	 * FLOOD_CAP only bounds the test if D never registers at all; it is a
+	 * safety net, not a tuned value. */
+	const int FLOOD_CAP = 2000000;
+	std::atomic<bool> stopFlood(false);
+	std::atomic<bool> flooding(true);
+	std::thread floodThread([fdB, &stopFlood, &flooding]() {
+		for (int i = 0; i < FLOOD_CAP && !stopFlood; ++i)
+			sendLine(fdB, "PRIVMSG #flood2 :msg-" + std::to_string(i));
+		flooding = false;
+	});
+
+	/* Bounded-retry registration of a brand-new client D while B floods.
+	 * EXPECT_GE (not ASSERT_GE) inside the loop: an ASSERT would return
+	 * from the test with floodThread still joinable -> std::terminate. */
+	const int MAX_ATTEMPTS = 15;
+	bool registered = false;
+	bool stillFloodingAtRegistration = false;
+	std::string lastReply;
+	for (int attempt = 0; attempt < MAX_ATTEMPTS && !registered; ++attempt)
+	{
+		int fdD = quickConnect(serverPort);
+		EXPECT_GE(fdD, 0);
+		if (fdD < 0) continue;
+
+		sendLine(fdD, "PASS robpass");
+		sendLine(fdD, "NICK survD");
+		sendLine(fdD, "USER survD 0 * :Test");
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		lastReply = recvBuf(fdD, 100);
+		registered = lastReply.find(" 001 ") != std::string::npos;
+		if (registered)
+			stillFloodingAtRegistration = flooding;  /* sampled BEFORE stopFlood */
+		close(fdD);
+	}
+
+	stopFlood = true;
+	floodThread.join();
+
+	close(fdA);
+	close(fdB);
+
+	EXPECT_TRUE(registered)
+		<< "A new client should still register (001) while a flood is in "
+		   "flight against a frozen reader; last reply: '" << lastReply
+		<< "'";
+
+	/* Guard against a vacuous pass, sampled at the moment D actually got
+	 * its 001. With a self-terminating flood this can only fire if the
+	 * FLOOD_CAP was exhausted before D ever registered — i.e. a genuine
+	 * failure, not a machine-speed difference. Never weaken this guard to
+	 * make the test green. */
+	EXPECT_TRUE(stillFloodingAtRegistration)
+		<< "D completed registration only after the flood had already "
+		   "drained (FLOOD_CAP=" << FLOOD_CAP << " exhausted), so "
+		   "registration under backpressure was never tested";
+}
+
+TEST_F(RobustnessTest, FrozenReaderEventuallyDisconnectedOnSendQ)
+{
+	/* Heaviest test in the suite: sends ~12 MB to push a frozen reader past
+	 * both this machine's real OS socket-buffer ceiling and the 64 KiB
+	 * MAX_SENDQ latch. The exact byte count at which the disconnect fires
+	 * is environment-dependent (see
+	 * .claude/workflow/tasks/T6-frozen-reader-flood/01-audit.md) — this
+	 * flood volume carries a wide safety margin (~6x) over the ~1.88 MB
+	 * ceiling measured on the audit machine, not tuned to it. */
+	int fdA = quickConnect(serverPort);
+	ASSERT_GE(fdA, 0);
+	sendLine(fdA, "PASS robpass");
+	sendLine(fdA, "NICK cutA");
+	sendLine(fdA, "USER cutA 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fdA);
+	sendLine(fdA, "JOIN #flood3");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	recvBuf(fdA);
+	/* Unlike Tests 1 and 2, fdA IS read below — but only after the server
+	 * has already closed it: the wait loop's first recv() returns a full
+	 * 4096B buffer (~1.88MB still queued by the OS), and drains to EOF in
+	 * <1ms. It never competes with the live flood, so the disconnect it
+	 * observes is a real SendQ cut, not an artifact of the test draining A. */
+
+	int fdB = quickConnect(serverPort);
+	ASSERT_GE(fdB, 0);
+	sendLine(fdB, "PASS robpass");
+	sendLine(fdB, "NICK cutB");
+	sendLine(fdB, "USER cutB 0 * :Test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	recvBuf(fdB);
+	sendLine(fdB, "JOIN #flood3");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	recvBuf(fdB);
+
+	const int FLOOD_LINES = 30000;
+	const std::string payload(400, 'A'); /* line ~419B, under the 512B input cap */
+	for (int i = 0; i < FLOOD_LINES; ++i)
+		sendLine(fdB, "PRIVMSG #flood3 :" + payload);
+
+	/* Bounded wait for A's socket to be closed server-side: keep recv()ing
+	 * (draining whatever backlog already arrived) until EOF (n == 0), with
+	 * a generous but finite safety-net deadline so a hypothetical
+	 * environment whose OS buffers absorb the whole flood fails this test
+	 * cleanly instead of hanging the suite. */
+	struct timeval tv;
+	tv.tv_sec = 0;
+	tv.tv_usec = 200 * 1000;
+	setsockopt(fdA, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+	bool closed = false;
+	const std::chrono::steady_clock::time_point deadline =
+		std::chrono::steady_clock::now() + std::chrono::seconds(20);
+	char buf[4096];
+	while (std::chrono::steady_clock::now() < deadline)
+	{
+		ssize_t n = recv(fdA, buf, sizeof(buf), 0);
+		if (n == 0) { closed = true; break; }
+		/* n < 0: timeout, keep polling. n > 0: still draining backlog. */
+	}
+
+	EXPECT_TRUE(closed)
+		<< "Frozen reader A should eventually be disconnected once a large "
+		   "enough flood (" << FLOOD_LINES << " lines, ~"
+		<< (FLOOD_LINES * (payload.size() + 19)) / (1024 * 1024)
+		<< " MB) exceeds real OS + MAX_SENDQ backpressure";
+
+	close(fdA);
+	close(fdB);
 }

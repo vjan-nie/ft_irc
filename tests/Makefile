@@ -127,6 +127,9 @@ $(PM_OBJ): $(PM_SRC)
 	@mkdir -p $(OBJDIR)
 	$(CXX) $(CXXFLAGS) $(INC_PM) -c $< -o $@
 
+build: $(NAME)
+	@echo "\n══════ Built $(NAME) (not run) ══════\n"
+
 clean:
 	rm -rf $(OBJDIR)
 
@@ -135,4 +138,4 @@ fclean: clean
 
 re: fclean all
 
-.PHONY: all clean fclean re
+.PHONY: all build  clean fclean re
