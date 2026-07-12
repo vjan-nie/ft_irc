@@ -90,10 +90,5 @@ Tests use Google Test but also feed every result into **PostMan** (`vendor/PostM
   `close()`d, while a large SendQ was still pending for it, killed the whole
   process with SIGPIPE (exit 141). Now installed in `tests/test_main.cpp`.
   Keep it there; it is a property of the process, not of any one fixture.
-- **Backpressure tests must overlap the flood**: the T6 frozen-reader tests
-  assert isolation/survival *during* an in-flight flood, not after it. Both
-  carry a guard (`MIN_PROBES`, `stillFloodingAtRegistration`) that FAILS if
-  the flood drains before the condition is probed — the original versions
-  passed vacuously with 1000 lines (~1 ms of flood). If a guard fires, raise
-  FLOOD_LINES or cheapen the probe; never drop the guard.
+- Autodeterminded flood; overlap is structural, not a race; don't return it as fixed FLOOD_LINES.
   
