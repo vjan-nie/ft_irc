@@ -35,6 +35,15 @@ public:
 
 int main(int argc, char **argv)
 {
+	/* test_runner does not link main.cpp, so the signal(SIGPIPE, SIG_IGN)
+	 * that ircserv installs in production never runs here. Without it, a
+	 * server-side send() to a socket the test has already close()d — while
+	 * the server still has a large SendQ pending for it, as in the T6
+	 * frozen-reader tests — kills the whole process with SIGPIPE instead of
+	 * returning EPIPE. This aligns the test process's signal disposition
+	 * with the shipped binary's. */
+	signal(SIGPIPE, SIG_IGN);
+
 	::testing::InitGoogleTest(&argc, argv);
 
 	/* Attach PostMan listener (gtest owns the pointer) */
