@@ -686,7 +686,11 @@ TEST_F(RobustnessTest, FrozenReaderEventuallyDisconnectedOnSendQ)
 	sendLine(fdA, "JOIN #flood3");
 	std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	recvBuf(fdA);
-	/* fdA is never read again below this point */
+	/* Unlike Tests 1 and 2, fdA IS read below — but only after the server
+	 * has already closed it: the wait loop's first recv() returns a full
+	 * 4096B buffer (~1.88MB still queued by the OS), and drains to EOF in
+	 * <1ms. It never competes with the live flood, so the disconnect it
+	 * observes is a real SendQ cut, not an artifact of the test draining A. */
 
 	int fdB = quickConnect(serverPort);
 	ASSERT_GE(fdB, 0);
