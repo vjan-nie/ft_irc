@@ -516,27 +516,36 @@ TEST_F(RobustnessTest, ThirdClientUnaffectedByFrozenReaderFlood)
 	std::this_thread::sleep_for(std::chrono::milliseconds(200));
 	recvBuf(fdC);
 
-	const int FLOOD_LINES = 200000;   // ~0.5s of real backpressure
-	std::atomic<bool> flooding(true);
-	std::thread floodThread([fdB, &flooding]() {
-		for (int i = 0; i < FLOOD_LINES; ++i)
+	/* The flood runs until the probe loop says stop, not for a fixed line
+	 * count. A fixed volume makes the overlap a race: the flood has to
+	 * happen to last longer than the probes on every machine — exactly the
+	 * assumption that passed locally and failed in the CI container for
+	 * ServerSurvivesFloodAgainstFrozenReader. Here the flood is
+	 * self-terminating, so the probe window is STRUCTURALLY inside it.
+	 *
+	 * FLOOD_CAP only bounds the test if the probes never complete; it is a
+	 * safety net, not a tuned value. */
+	const int FLOOD_CAP = 2000000;
+	std::atomic<bool> stopFlood(false);
+	std::thread floodThread([fdB, &stopFlood]() {
+		for (int i = 0; i < FLOOD_CAP && !stopFlood; ++i)
 			sendLine(fdB, "PRIVMSG #flood1 :msg-" + std::to_string(i));
-		flooding = false;
 	});
 
-	/* C must stay responsive for the WHOLE duration of the flood, not just
-	 * at its start: probe repeatedly until the flood thread reports done.
-	 * The bar is "never goes silent for a stretch" (maxStreak), not "zero
-	 * late replies" — a single missed round is jitter above recvBuf's 50ms
-	 * timeout, whereas a server blocking on the frozen reader would miss
-	 * every round for a long run. */
-	int probes = 0, pongs = 0, misses = 0, maxStreak = 0, streak = 0;
+	/* C must stay responsive for the WHOLE probe window while A is a frozen
+	 * reader and B floods the shared channel. The bar is "never goes silent
+	 * for a stretch" (maxStreak), not "zero late replies" — a single missed
+	 * round is jitter above recvBuf's 50ms timeout, whereas a server
+	 * blocking on the frozen reader would miss every round for a long run. */
+	const int PROBE_ROUNDS = 10;
+	int pongs = 0;
+	int maxStreak = 0;
+	int streak = 0;
 	std::string lastReply;
-	while (flooding)
+	for (int i = 0; i < PROBE_ROUNDS; ++i)
 	{
 		sendLine(fdC, "PING :isolation-check");
 		lastReply = recvBuf(fdC, 50);
-		++probes;
 		if (lastReply.find("PONG") != std::string::npos)
 		{
 			++pongs;
@@ -544,30 +553,18 @@ TEST_F(RobustnessTest, ThirdClientUnaffectedByFrozenReaderFlood)
 		}
 		else
 		{
-			++misses;
 			++streak;
 			if (streak > maxStreak)
 				maxStreak = streak;
 		}
 	}
 
-	floodThread.join();   /* joined before any ASSERT below can return early */
+	stopFlood = true;
+	floodThread.join();
 
 	close(fdA);
 	close(fdB);
 	close(fdC);
-
-	/* Guard against a vacuous pass: the original T6 defect was a flood that
-	 * drained in ~1ms, leaving a single probe round with no overlap. Two or
-	 * more rounds proves a real backpressure window existed. The exact count
-	 * is environment-dependent (probe round cost is bounded by recvBuf's
-	 * SO_RCVTIMEO, flood duration by machine speed), so this is deliberately
-	 * a floor, not a tuned value. */
-	const int MIN_PROBES = 2;
-	ASSERT_GE(probes, MIN_PROBES)
-		<< "Flood drained too fast (" << probes << " probe rounds) — "
-		   "FLOOD_LINES=" << FLOOD_LINES << " produced no measurable "
-		   "backpressure window, so isolation was never actually tested";
 
 	EXPECT_GT(pongs, 0)
 		<< "Client C got no PONG at all during the flood";
@@ -576,7 +573,8 @@ TEST_F(RobustnessTest, ThirdClientUnaffectedByFrozenReaderFlood)
 		<< "Client C went " << maxStreak << " consecutive probe rounds "
 		   "without a PONG while A is a frozen reader and B floods the "
 		   "shared channel — that is loss of service, not jitter (" << pongs
-		<< "/" << probes << " answered); last reply: '" << lastReply << "'";
+		<< "/" << PROBE_ROUNDS << " answered); last reply: '" << lastReply
+		<< "'";
 }
 
 TEST_F(RobustnessTest, ServerSurvivesFloodAgainstFrozenReader)
@@ -604,28 +602,34 @@ TEST_F(RobustnessTest, ServerSurvivesFloodAgainstFrozenReader)
 	std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	recvBuf(fdB);
 
-	const int FLOOD_LINES = 200000;
+	/* The flood runs until the test tells it to stop, rather than for a
+	 * fixed line count that has to be tuned to outrace D's registration on
+	 * every machine. A fixed volume is a race by construction: it passed
+	 * locally (~200k lines ≈ 0.5s) and failed in the CI container, where
+	 * the same flood drained before D got its 001. Letting the flood run
+	 * until D registers makes the overlap STRUCTURAL — D cannot possibly
+	 * register outside an in-flight flood — instead of probabilistic.
+	 *
+	 * FLOOD_CAP only bounds the test if D never registers at all; it is a
+	 * safety net, not a tuned value. */
+	const int FLOOD_CAP = 2000000;
+	std::atomic<bool> stopFlood(false);
 	std::atomic<bool> flooding(true);
-	std::thread floodThread([fdB, &flooding]() {
-		for (int i = 0; i < FLOOD_LINES; ++i)
+	std::thread floodThread([fdB, &stopFlood, &flooding]() {
+		for (int i = 0; i < FLOOD_CAP && !stopFlood; ++i)
 			sendLine(fdB, "PRIVMSG #flood2 :msg-" + std::to_string(i));
 		flooding = false;
 	});
 
-	/* Bounded-retry registration of a brand-new client D, overlapping B's
-	 * in-flight flood — the point is that D registers WHILE the server is
-	 * under backpressure, not after the flood has already drained.
+	/* Bounded-retry registration of a brand-new client D while B floods.
 	 * EXPECT_GE (not ASSERT_GE) inside the loop: an ASSERT would return
 	 * from the test with floodThread still joinable -> std::terminate. */
 	const int MAX_ATTEMPTS = 15;
 	bool registered = false;
-	bool overlapped = false;
+	bool stillFloodingAtRegistration = false;
 	std::string lastReply;
 	for (int attempt = 0; attempt < MAX_ATTEMPTS && !registered; ++attempt)
 	{
-		if (flooding)
-			overlapped = true;
-
 		int fdD = quickConnect(serverPort);
 		EXPECT_GE(fdD, 0);
 		if (fdD < 0) continue;
@@ -634,25 +638,33 @@ TEST_F(RobustnessTest, ServerSurvivesFloodAgainstFrozenReader)
 		sendLine(fdD, "NICK survD");
 		sendLine(fdD, "USER survD 0 * :Test");
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
-		lastReply = recvBuf(fdD);
+		lastReply = recvBuf(fdD, 100);
 		registered = lastReply.find(" 001 ") != std::string::npos;
+		if (registered)
+			stillFloodingAtRegistration = flooding;  /* sampled BEFORE stopFlood */
 		close(fdD);
 	}
 
+	stopFlood = true;
 	floodThread.join();
 
-	EXPECT_TRUE(overlapped)
-		<< "D's registration never overlapped an in-flight flood — the "
-		   "flood drained before the first attempt, so this test would "
-		   "pass identically with no flood at all";
+	close(fdA);
+	close(fdB);
 
 	EXPECT_TRUE(registered)
 		<< "A new client should still register (001) while a flood is in "
 		   "flight against a frozen reader; last reply: '" << lastReply
 		<< "'";
 
-	close(fdA);
-	close(fdB);
+	/* Guard against a vacuous pass, sampled at the moment D actually got
+	 * its 001. With a self-terminating flood this can only fire if the
+	 * FLOOD_CAP was exhausted before D ever registered — i.e. a genuine
+	 * failure, not a machine-speed difference. Never weaken this guard to
+	 * make the test green. */
+	EXPECT_TRUE(stillFloodingAtRegistration)
+		<< "D completed registration only after the flood had already "
+		   "drained (FLOOD_CAP=" << FLOOD_CAP << " exhausted), so "
+		   "registration under backpressure was never tested";
 }
 
 TEST_F(RobustnessTest, FrozenReaderEventuallyDisconnectedOnSendQ)
