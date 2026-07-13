@@ -210,6 +210,12 @@ class TestReport {
    */
   void print() const;
 
+  /**
+   * @brief Number of rows currently recorded.
+   * @return The number of assertion rows recorded so far.
+   */
+  int rowCount() const;
+
  private:
   int _allocSnapshot; //NEW: Stores the baseline memory count
   /** @brief Private constructor (Singleton pattern). */

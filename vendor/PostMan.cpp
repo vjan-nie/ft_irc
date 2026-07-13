@@ -159,6 +159,8 @@ void TestReport::record(const std::string& label, bool passed) {
   ++_count;
 }
 
+int TestReport::rowCount() const { return _count; }
+
 /* ========================================================================
  * UTF-8 String Measurement & Manipulation
  * ======================================================================== */

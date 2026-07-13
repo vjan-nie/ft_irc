@@ -66,7 +66,8 @@ TEST_SRCS	= test_main.cpp \
 			  test_security.cpp \
 			  test_filetransfer.cpp \
 			  test_extensions.cpp \
-			  test_libcpp98.cpp
+			  test_libcpp98.cpp \
+			  test_postman.cpp
 
 # ── Vendor sources ────────────────────────────────────────────
 GTEST_SRC	= ../vendor/googletest/googletest/src/gtest-all.cc
