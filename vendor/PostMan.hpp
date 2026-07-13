@@ -31,6 +31,7 @@
 
 #include <iostream>
 #include <string>
+#include <vector>
 
 /** @defgroup ColorMacros ANSI Color & Style Macros */
 /** @{ */
@@ -72,9 +73,6 @@
 #define PM_FAIL  "\033[38;5;210m"
 
 /** @} */
-
-/** Maximum number of assertion records that can be stored before overflow. */
-#define PM_MAX_ROWS 256
 
 /**
  * @struct PmRow
@@ -141,7 +139,7 @@ struct PmCols {
  * @class TestReport
  * @brief A Singleton class that collects and prints formatted test results.
  *
- * The TestReport class maintains an internal array of up to PM_MAX_ROWS test
+ * The TestReport class maintains a dynamically-sized list of test
  * records. It provides methods to:
  * - Group tests into logical suites with beginSuite()
  * - Record individual pass/fail assertions with record()
@@ -188,8 +186,7 @@ class TestReport {
   /**
    * @brief Record a single assertion result.
    *
-   * Stores the assertion in the internal buffer. If the buffer is full
-   * (PM_MAX_ROWS reached), the assertion is silently ignored.
+   * Stores the assertion in the internal buffer, which grows as needed.
    *
    * @param label The description of what the assertion tests.
    * @param passed True if the assertion passed, false otherwise.
@@ -210,6 +207,12 @@ class TestReport {
    */
   void print() const;
 
+  /**
+   * @brief Number of rows currently recorded.
+   * @return The number of assertion rows recorded so far.
+   */
+  int rowCount() const;
+
  private:
   int _allocSnapshot; //NEW: Stores the baseline memory count
   /** @brief Private constructor (Singleton pattern). */
@@ -221,11 +224,8 @@ class TestReport {
   /** @brief Deleted assignment operator (non-assignable). */
   TestReport& operator=(const TestReport&);
 
-  /** Array of test assertion records. */
-  PmRow       _rows[PM_MAX_ROWS];
-
-  /** Current number of recorded assertions. */
-  int         _count;
+  /** Dynamically-sized list of test assertion records. */
+  std::vector<PmRow> _rows;
 
   /** Name of the current test suite. */
   std::string _currentSuite;
