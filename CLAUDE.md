@@ -69,7 +69,7 @@ Dispatch enforces a **registration gate**: only CAP/PASS/NICK/USER/QUIT/PONG run
 
 ## Testing
 
-Tests use Google Test but also feed every result into **PostMan** (`vendor/PostMan.cpp`), a styled Unicode-table reporter — `tests/test_main.cpp` bridges the two via a custom `TestEventListener`. `tests/Makefile` builds all of `src/` *except* `main.cpp` (linking `tier_full.cpp` as the one `registerExtensions` definition). Protocol-level suites share `tests/TestHarness.hpp` (TCP `TestClient` + `IrcServerTest` fixture; subclass and override `portBase()` per suite, `onServerReady()` to inject probe extensions). Test files: `test_message`, `test_client`, `test_channel`, `test_bot`, `test_integration`, `test_robustness`, `test_security`, `test_filetransfer`, `test_extensions`, `test_libcpp98`. Suite is 139/139; PostMan's leak counter is atomic and `assertNoLeaks` takes `const char*` (a `std::string` argument would count itself as a leak — keep it that way).
+Tests use Google Test but also feed every result into **PostMan** (`vendor/PostMan.cpp`), a styled Unicode-table reporter — `tests/test_main.cpp` bridges the two via a custom `TestEventListener`. `tests/Makefile` builds all of `src/` *except* `main.cpp` (linking `tier_full.cpp` as the one `registerExtensions` definition). Protocol-level suites share `tests/TestHarness.hpp` (TCP `TestClient` + `IrcServerTest` fixture; subclass and override `portBase()` per suite, `onServerReady()` to inject probe extensions). Test files: `test_message`, `test_client`, `test_channel`, `test_bot`, `test_integration`, `test_robustness`, `test_security`, `test_filetransfer`, `test_extensions`, `test_libcpp98`. ~149 tests (see PostMan table); PostMan's leak counter is atomic and `assertNoLeaks` takes `const char*` (a `std::string` argument would count itself as a leak — keep it that way).
 
 ## Known traps
 
@@ -91,4 +91,17 @@ Tests use Google Test but also feed every result into **PostMan** (`vendor/PostM
   process with SIGPIPE (exit 141). Now installed in `tests/test_main.cpp`.
   Keep it there; it is a property of the process, not of any one fixture.
 - Autodeterminded flood; overlap is structural, not a race; don't return it as fixed FLOOD_LINES.
+- **Backpressure tests use a self-terminating flood**: the T6 frozen-reader
+  tests (`test_robustness.cpp`) flood until the test says stop (`stopFlood`),
+  bounded by a `FLOOD_CAP` safety net — NOT for a fixed `FLOOD_LINES` count.
+  A fixed volume makes the overlap a race: the flood has to happen to outlast
+  the probe on every machine. The 200k-line version passed locally and failed
+  in the CI container. Do not "simplify" this back to a fixed count.
+- **PostMan silently dropped rows above 256** (fixed in T7): `PM_MAX_ROWS` was
+  a fixed-array cap and `record()` returned early past it, with no warning.
+  Under `--gtest_repeat=3` the table printed "All 256 assertions passed" while
+  444 tests had actually run — and a real FAIL past row 256 was swallowed,
+  leaving a green table against a red exit code. `_rows` is now a
+  `std::vector` with no cap. **Any `--gtest_repeat` validation done before T7
+  may have read a truncated report.**
   
