@@ -129,7 +129,7 @@ TestReport& TestReport::instance() {
   return inst;
 }
 
-TestReport::TestReport() : _count(0), _currentSuite("(none)") {}
+TestReport::TestReport() : _currentSuite("(none)") {}
 
 /**
  * @brief Begin a new test suite section.
@@ -144,22 +144,21 @@ void TestReport::beginSuite(const std::string& name) { _currentSuite = name; }
 /**
  * @brief Record a test assertion result.
  *
- * Stores the assertion in the internal buffer at _rows[_count].
- * If the buffer is full (>= PM_MAX_ROWS), the assertion is ignored.
+ * Appends the assertion to the internal buffer, which grows as needed.
  *
  * @param label Description of what the assertion tests.
  * @param passed True if assertion passed, false if failed.
  */
 void TestReport::record(const std::string& label, bool passed) {
-  if (_count >= PM_MAX_ROWS) return;
-  _rows[_count].id     = _count + 1;
-  _rows[_count].suite  = _currentSuite;
-  _rows[_count].label  = label;
-  _rows[_count].passed = passed;
-  ++_count;
+  PmRow row;
+  row.id     = static_cast<int>(_rows.size()) + 1;
+  row.suite  = _currentSuite;
+  row.label  = label;
+  row.passed = passed;
+  _rows.push_back(row);
 }
 
-int TestReport::rowCount() const { return _count; }
+int TestReport::rowCount() const { return static_cast<int>(_rows.size()); }
 
 /* ========================================================================
  * UTF-8 String Measurement & Manipulation
@@ -493,18 +492,19 @@ void TestReport::drawVerdict(const PmCols& c, int p, int f) {
  * @note Call this after all test assertions have been recorded.
  */
 void TestReport::print() const {
+  const int n = static_cast<int>(_rows.size());
   int passed = 0, failed = 0;
-  for (int i = 0; i < _count; ++i)
+  for (int i = 0; i < n; ++i)
     _rows[i].passed ? ++passed : ++failed;
-  PmCols cols = calcCols(_rows, _count);
+  PmCols cols = calcCols(_rows.data(), n);
   std::cout << "\n\n";
-  drawTitle(cols, passed, failed, _count);
+  drawTitle(cols, passed, failed, n);
   drawHeader(cols);
   drawHLine(cols, 7);
 
   std::string lastSuite;
   int sp = 0, sf = 0;
-  for (int i = 0; i < _count; ++i) {
+  for (int i = 0; i < n; ++i) {
     if (_rows[i].suite != lastSuite) {
       if (i != 0) {
         drawHLine(cols, 9);
@@ -517,7 +517,7 @@ void TestReport::print() const {
     _rows[i].passed ? ++sp : ++sf;
     drawRow(cols, _rows[i]);
   }
-  if (_count > 0) {
+  if (n > 0) {
     drawHLine(cols, 9);
     drawSuiteSum(cols, lastSuite, sp, sf);
   }
