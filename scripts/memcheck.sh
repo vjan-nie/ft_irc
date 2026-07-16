@@ -2,10 +2,13 @@
 # ─────────────────────────────────────────────────────────────────────────────
 #  memcheck.sh — run ircserv under valgrind to check for leaks.
 #
-#  Interactive (default, unchanged): builds the binary, launches it under
-#  valgrind, then you connect a client (nc / HexChat) and Ctrl-C to trigger
-#  clean shutdown; valgrind prints the leak summary. Wraps the flags libcpp's
-#  valgrind_check.sh uses.
+#  Interactive (default): builds the binary, launches it under valgrind,
+#  then you connect a client (nc / HexChat) and Ctrl-C to trigger clean
+#  shutdown; valgrind prints the leak summary. Wraps the flags libcpp's
+#  valgrind_check.sh uses. Same driving flow as before scripted mode was
+#  added, but VG_FLAGS is shared with scripted mode below, so the leak
+#  summary you read here now also counts indirect leaks as errors
+#  (previously --errors-for-leak-kinds=definite only).
 #
 #  Scripted (--auto / --scripted): no human required. Drives a fixed set of
 #  IRC client sessions over plain bash /dev/tcp sockets — registration, JOIN,
@@ -30,8 +33,9 @@
 #  Usage:
 #    scripts/memcheck.sh [--auto|--scripted] [--tier=mandatory|bonus|full] [port] [password]
 #
-#  No flags: identical to the original interactive-only behavior (default
-#  tier = full, via plain `make`).
+#  No flags: same interactive-only driving flow as before scripted mode
+#  existed (default tier = full, via plain `make`) — except the leak-kind
+#  flags are now shared with scripted mode (see above).
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 
@@ -60,7 +64,14 @@ PASS="${2:-pass}"
 
 VG_FLAGS=(--leak-check=full --show-leak-kinds=all --track-origins=yes
           --errors-for-leak-kinds=definite,indirect)
-VG_ERR_EXIT=97   # only used in scripted mode — see below
+VG_ERR_EXIT=97      # only used in scripted mode — see below
+SETUP_FAIL_EXIT=90  # scripted mode only: a wait_for on the welcome/JOIN
+                     # echo timed out, or C3's membership in #vgtest
+                     # couldn't be confirmed against the server — the run
+                     # never verified the "clients alive at SIGTERM"
+                     # scenario it claims to exercise. Kept distinct from
+                     # 0 (clean) and 97 (leak) so the three outcomes stay
+                     # distinguishable: green / leak / setup-unverified.
 
 build_tier() {
 	case "$1" in
@@ -71,7 +82,7 @@ build_tier() {
 	esac
 }
 
-# ── interactive mode (unchanged behavior) ───────────────────────────────────
+# ── interactive mode ─────────────────────────────────────────────────────
 if [ "$MODE" = "interactive" ]; then
 	build_tier "$TIER" >/dev/null || { echo "build failed"; exit 1; }
 	echo "Running ircserv on port $PORT under valgrind."
@@ -132,9 +143,9 @@ session_c1_graceful() {
 	send_line "$sockfd" "PASS $pass"
 	send_line "$sockfd" "NICK vg_c1"
 	send_line "$sockfd" "USER vg_c1 0 * :vg c1"
-	wait_for "$sockfd" " 001 " 20 || echo "  C1: no welcome (continuing anyway)"
+	wait_for "$sockfd" " 001 " 20 || { echo "  C1: no welcome — setup unverified"; SETUP_FAILURES=$((SETUP_FAILURES + 1)); }
 	send_line "$sockfd" "JOIN #vgtest"
-	wait_for "$sockfd" "JOIN #vgtest" 20 || echo "  C1: no join echo (continuing anyway)"
+	wait_for "$sockfd" "JOIN #vgtest" 20 || { echo "  C1: no join echo — setup unverified"; SETUP_FAILURES=$((SETUP_FAILURES + 1)); }
 	send_line "$sockfd" "PRIVMSG #vgtest :hello from c1"
 	send_line "$sockfd" "PART #vgtest"
 	send_line "$sockfd" "QUIT :bye"
@@ -150,9 +161,9 @@ session_c2_abrupt() {
 	send_line "$sockfd" "PASS $pass"
 	send_line "$sockfd" "NICK vg_c2"
 	send_line "$sockfd" "USER vg_c2 0 * :vg c2"
-	wait_for "$sockfd" " 001 " 20 || echo "  C2: no welcome (continuing anyway)"
+	wait_for "$sockfd" " 001 " 20 || { echo "  C2: no welcome — setup unverified"; SETUP_FAILURES=$((SETUP_FAILURES + 1)); }
 	send_line "$sockfd" "JOIN #vgtest"
-	wait_for "$sockfd" "JOIN #vgtest" 20 || echo "  C2: no join echo (continuing anyway)"
+	wait_for "$sockfd" "JOIN #vgtest" 20 || { echo "  C2: no join echo — setup unverified"; SETUP_FAILURES=$((SETUP_FAILURES + 1)); }
 	send_line "$sockfd" "PRIVMSG #vgtest :hello from c2"
 	exec {sockfd}<&-   # no QUIT — simulates a dropped connection
 }
@@ -166,9 +177,9 @@ session_c3_alive_registered() {
 	send_line "$sockfd" "PASS $pass"
 	send_line "$sockfd" "NICK vg_c3"
 	send_line "$sockfd" "USER vg_c3 0 * :vg c3"
-	wait_for "$sockfd" " 001 " 20 || echo "  C3: no welcome (continuing anyway)"
+	wait_for "$sockfd" " 001 " 20 || { echo "  C3: no welcome — setup unverified"; SETUP_FAILURES=$((SETUP_FAILURES + 1)); }
 	send_line "$sockfd" "JOIN #vgtest"
-	wait_for "$sockfd" "JOIN #vgtest" 20 || echo "  C3: no join echo (continuing anyway)"
+	wait_for "$sockfd" "JOIN #vgtest" 20 || { echo "  C3: no join echo — setup unverified"; SETUP_FAILURES=$((SETUP_FAILURES + 1)); }
 	printf -v "$outvar" '%d' "$sockfd"
 }
 
@@ -185,6 +196,18 @@ session_c4_alive_unregistered() {
 run_scripted() {
 	local tier="$1" port="$2" pass="$3"
 	local log rc c3fd c4fd vg_pid
+
+	# Defense in depth against an anomalous mid-orchestration exit (e.g. an
+	# unbound variable under `set -u` in a future edit): whatever happens,
+	# don't leave valgrind/ircserv running. Harmless no-op on the normal
+	# path, where vg_pid has already been waited on.
+	trap 'kill -TERM "${vg_pid:-}" 2>/dev/null' EXIT
+
+	# Counts fatal setup failures (welcome/JOIN wait_for timeouts, failed
+	# membership verification) accumulated by the session_* helpers below —
+	# they run in this shell, not a subshell, so a plain assignment (no
+	# `local`) is visible here. See SETUP_FAIL_EXIT.
+	SETUP_FAILURES=0
 
 	echo "== scripted valgrind run: tier=$tier port=$port =="
 	build_tier "$tier" >/dev/null || { echo "build failed"; return 1; }
@@ -206,6 +229,27 @@ run_scripted() {
 	session_c3_alive_registered "$port" "$pass" c3fd
 	session_c4_alive_unregistered "$port" c4fd
 
+	# Positive verification, against the server, that C3 actually is a
+	# member of #vgtest — not inferred from the JOIN echo above. NAMES
+	# isn't wired up as a standalone command in this codebase (only
+	# auto-sent as part of JOIN's own reply), so WHO #vgtest is the
+	# server-side membership query available. Same generous timeout budget
+	# as the other wait_for calls, since this also runs under Memcheck.
+	if [ -n "${c3fd:-}" ]; then
+		send_line "$c3fd" "WHO #vgtest"
+		# Every numeric reply to C3 carries its own nick as the target field
+		# (sendReply prepends client->getNickname()), including the
+		# always-sent RPL_ENDOFWHO — so a bare "vg_c3" match would pass even
+		# with an empty/nonexistent channel. Match "#vgtest vg_c3" instead:
+		# that's target+" "+username from a genuine RPL_WHOREPLY member
+		# line (CommandQuery.cpp), which only appears when the server
+		# actually lists vg_c3 as a channel member.
+		wait_for "$c3fd" "#vgtest vg_c3" 20 || { echo "  C3: not confirmed as member of #vgtest — setup unverified"; SETUP_FAILURES=$((SETUP_FAILURES + 1)); }
+	else
+		echo "  C3: no connection to verify membership on — setup unverified"
+		SETUP_FAILURES=$((SETUP_FAILURES + 1))
+	fi
+
 	# C3/C4 stay connected right up to the signal — no client is fully
 	# quiescent, matching the "several clients alive at SIGTERM" scenario.
 	kill -TERM "$vg_pid"
@@ -218,10 +262,13 @@ run_scripted() {
 	echo "-- valgrind summary ($log) --"
 	grep -E "definitely lost|indirectly lost|ERROR SUMMARY" "$log" || true
 
-	if [ "$rc" -eq 0 ]; then
-		echo "PASS — tier=$tier, exit=$rc, log=$log"
-	else
+	if [ "$rc" -ne 0 ]; then
 		echo "FAIL — tier=$tier, exit=$rc, log=$log"
+	elif [ "$SETUP_FAILURES" -gt 0 ]; then
+		rc="$SETUP_FAIL_EXIT"
+		echo "SETUP UNVERIFIED ($SETUP_FAILURES failure(s)) — tier=$tier, exit=$rc, log=$log"
+	else
+		echo "PASS — tier=$tier, exit=$rc, log=$log"
 	fi
 	return "$rc"
 }
