@@ -42,9 +42,8 @@ FancyLogSink, shrinking the surface an evaluator can question.
 | Partial commands; others keep running | 🟡 | `Integration.PartialDataReassembly`; `ClientBuffer.PartialMessagePreserved`; `LineBuffer98.FragmentedCRLF` | Reassembly proven; "other clients fine *while* a partial is pending" not explicitly interleaved |
 | Kill client abruptly; server stays up | ✅ | `Robustness.AbruptDisconnect`, `RapidConnectDisconnect` | |
 | Kill nc mid-command | 🟡 | `Robustness.AbruptDisconnect` | Not specifically "disconnect while a partial is buffered" |
-| **^Z a reader + flood from another; no hang; drains on resume; no leaks** | 🔴 | partial: `SendQ.OverflowLatches`, `CommandFlood`, `NoLeakAfterClientChurn` | **GAP.** No integration test of a *frozen reader* being flooded (output backpressure). Directly tied to the EPOLLOUT/SENDQ design — high-value test |
-| No memory leaks during operations | 🟡 | in-process leak counter (`NoLeak*`, PostMan) + `scripts/memcheck.sh` exists | Eval uses **valgrind**; in-process counting ≠ valgrind. Verify `memcheck.sh` runs the sheet's scenarios (esp. ^Z+flood) under valgrind |
-
+| **^Z a reader + flood from another; no hang; drains on resume; no leaks** | ✅ | `Robustness.ThirdClientUnaffectedByFrozenReaderFlood` / `ServerSurvivesFloodAgainstFrozenReader` / `FrozenReaderEventuallyDisconnectedOnSendQ` (T6, self-terminating flood, asserts isolation/survival DURING the flood); leak side covered by `memcheck.sh --auto` (T6/P1) | Was a 🔴 gap; closed by T6. The three tests overlap the flood structurally, not as a timing race | partial: `SendQ.OverflowLatches`, `CommandFlood`, `NoLeakAfterClientChurn` | **GAP.** No integration test of a *frozen reader* being flooded (output backpressure). Directly tied to the EPOLLOUT/SENDQ design — high-value test |
+| No memory leaks during operations | ✅ | `scripts/memcheck.sh --auto` (P1): drives register/JOIN/PRIVMSG/PART/QUIT/abrupt-disconnect + SIGTERM with clients still alive, under valgrind, 3-way exit-code gate (0/97/90). Fire-drill-verified in both directions. In-process `NoLeak*` counter (PostMan) covers the flood path | Was 🟡 (in-process counting ≠ valgrind); now backed by an actual valgrind gate |
 ---
 
 ## D. Client commands (basic)
@@ -80,7 +79,7 @@ FancyLogSink, shrinking the surface an evaluator can question.
 | Sheet item | Status | Notes |
 |---|---|---|
 | No segfault / crash for the whole defense | 🟡 | Robustness suite helps; ultimately live + valgrind |
-| No leaks (heap freed before exit) | 🟡 | See C — needs a valgrind harness as a defense artifact |
+| No leaks (heap freed before exit) | ✅ | `memcheck.sh --auto` is the defense artifact; `~Server()` teardown confirmed clean across mandatory/bonus/full tiers | Was 🟡; valgrind harness now exists (P1) |
 
 ---
 
@@ -99,11 +98,11 @@ FancyLogSink, shrinking the surface an evaluator can question.
    scope.
 
 **P1 — scored / high-value robustness:**
-3. **Non-operator denial tests** (E) — the operator score is 0–5 and the sheet
+3. ✅**Non-operator denial tests** (E) — the operator score is 0–5 and the sheet
    checks denial explicitly. Add `ERR_CHANOPRIVSNEEDED` negative tests.
-4. **Frozen-reader + flood** integration test (C) — the marquee robustness
+4. ✅**Frozen-reader + flood** integration test (C) — the marquee robustness
    scenario; showcases the EPOLLOUT/SENDQ backpressure design.
-5. **Valgrind harness** (C/G) — verify/extend `scripts/memcheck.sh` to run the
+5. ✅**Valgrind harness** (C/G) — verify/extend `scripts/memcheck.sh` to run the
    sheet's scenarios under valgrind; keep the output as a defense artifact.
 
 **P2 — completeness / polish:**

@@ -107,3 +107,25 @@ Tests use Google Test but also feed every result into **PostMan** (`vendor/PostM
 - **checkTimeouts() disconnect reasons**: SendQ-exceeded and ping-timeout are
   distinct causes collected in the same sweep; each carries its own reason
   string (fixed — both used to report "Ping timeout"). Don't re-flatten them.
+- **Valgrind harness gate verifies the scenario happened, not just "no leak"**:
+  `scripts/memcheck.sh --auto` drives 4 client sessions and SIGTERMs with two
+  clients (C3/C4) still alive, to exercise `~Server()` teardown against live
+  `_clients`/`_channels` state. The gate has THREE exit codes, not two: `0`
+  clean, `97` leak (valgrind's `--error-exitcode`), `90` setup-unverified. The
+  90 exists because a bare "no leak" pass is a lie if the scenario never ran —
+  a broken JOIN once passed the gate green while no client actually joined.
+  C3's channel membership is now confirmed via a `WHO #vgtest` reply match
+  (`"#vgtest vg_c3"`, a real RPL_WHOREPLY member line — NOT bare `"vg_c3"`,
+  which also appears in RPL_ENDOFWHO and would match with no channel at all)
+  before the SIGTERM. Precedence: a real leak (97) always wins over a setup
+  failure (90). Don't weaken the WHO match and don't turn the setup `wait_for`s
+  back into cosmetic `echo`s.
+- **Flood stays out of valgrind on purpose**: Memcheck is ~20-50x slower, so a
+  meaningful flood takes minutes under it. The ^Z+flood leak path is covered by
+  PostMan's in-process counter (`NoLeakAfterClientChurn`), not by the valgrind
+  harness. Don't add it to `memcheck.sh` without re-reading the P1 audit.
+- **EXIT traps and `local` under `set -u`**: a `trap ... EXIT` that references a
+  `local` variable won't see it when `set -u` aborts mid-function — bash unwinds
+  the local scope before running the trap, so `kill -TERM "$vg_pid"` becomes a
+  no-op and the child is orphaned. Keep PIDs meant for an EXIT trap
+  script-scoped (like `vg_pid`/`SETUP_FAILURES` in `memcheck.sh`), never `local`.
