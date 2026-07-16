@@ -355,7 +355,7 @@ void Server::checkTimeouts()
 		return;
 	_lastPingCheck = now;
 
-	std::vector<int> toDisconnect;
+	std::vector<std::pair<int, const char *> > toDisconnect;
 	for (std::map<int, Client *>::iterator it = _clients.begin();
 		 it != _clients.end(); ++it)
 	{
@@ -364,11 +364,11 @@ void Server::checkTimeouts()
 
 		if (client->isSendQExceeded())
 		{
-			toDisconnect.push_back(it->first);
+			toDisconnect.push_back(std::make_pair(it->first, "SendQ exceeded"));
 		}
 		else if (client->isPingSent() && idle > PING_INTERVAL + PING_TIMEOUT)
 		{
-			toDisconnect.push_back(it->first);
+			toDisconnect.push_back(std::make_pair(it->first, "Ping timeout"));
 		}
 		else if (!client->isPingSent() && idle > PING_INTERVAL)
 		{
@@ -377,7 +377,7 @@ void Server::checkTimeouts()
 		}
 	}
 	for (size_t i = 0; i < toDisconnect.size(); ++i)
-		disconnectClient(toDisconnect[i], "Ping timeout");
+		disconnectClient(toDisconnect[i].first, toDisconnect[i].second);
 }
 
 /* ─── Command dispatch ─── */
