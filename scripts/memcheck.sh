@@ -195,7 +195,14 @@ session_c4_alive_unregistered() {
 
 run_scripted() {
 	local tier="$1" port="$2" pass="$3"
-	local log rc c3fd c4fd vg_pid
+	local log rc c3fd c4fd
+	# NOT local: an EXIT trap fired by an abrupt `set -u` termination
+	# mid-function does not see the function's `local` bindings (verified —
+	# a `local` vg_pid reads as unset inside the trap in that specific
+	# path, even though a plain `exit` from the same function preserves
+	# it). The trap below needs the real value, so vg_pid has to be a
+	# plain (script-global) assignment, same as SETUP_FAILURES below.
+	vg_pid=""
 
 	# Defense in depth against an anomalous mid-orchestration exit (e.g. an
 	# unbound variable under `set -u` in a future edit): whatever happens,
