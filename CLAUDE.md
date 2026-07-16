@@ -104,4 +104,6 @@ Tests use Google Test but also feed every result into **PostMan** (`vendor/PostM
   leaving a green table against a red exit code. `_rows` is now a
   `std::vector` with no cap. **Any `--gtest_repeat` validation done before T7
   may have read a truncated report.**
-  
+- **checkTimeouts() disconnect reasons**: SendQ-exceeded and ping-timeout are
+  distinct causes collected in the same sweep; each carries its own reason
+  string (fixed — both used to report "Ping timeout"). Don't re-flatten them.
