@@ -465,14 +465,27 @@ void Server::disconnectClient(int fd, const std::string &reason)
 	std::string prefix = client->getPrefix();
 	std::string quitMsg = ":" + prefix + " QUIT :" + reason;
 
-	// Broadcast QUIT to all channels the client is in, and remove them
+	// Broadcast QUIT to all channels the client is in, and remove them.
+	// Dedup by fd across channels (same pattern as broadcastToChannels)
+	// so a peer sharing N channels with the departing client gets the
+	// QUIT line queued once, not N times.
+	std::set<int> alreadySent;
+	alreadySent.insert(fd);
 	for (std::map<std::string, Channel *>::iterator it = _channels.begin();
 		 it != _channels.end();)
 	{
 		Channel *chan = it->second;
 		if (chan->isMember(client))
 		{
-			chan->broadcastMessage(quitMsg, client);
+			std::vector<Client *> members = chan->getMembers();
+			for (size_t i = 0; i < members.size(); ++i)
+			{
+				int mfd = members[i]->getFd();
+				if (alreadySent.count(mfd))
+					continue;
+				members[i]->queueMessage(quitMsg);
+				alreadySent.insert(mfd);
+			}
 			chan->removeMember(client);
 			if (chan->isEmpty())
 			{
