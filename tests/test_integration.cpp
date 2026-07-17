@@ -482,6 +482,9 @@ TEST_F(IntegrationTest, InviteAllowedForNonOperatorWhenNotInviteOnly)
 	guest.sendCmd("QUIT");
 }
 
+/* 404 here proves non-membership specifically: in this codebase
+ * ERR_CANNOTSENDTOCHAN has a single cause (!isMember). If +n/+m are
+ * ever added, this check needs a mode-independent membership probe. */
 TEST_F(IntegrationTest, JoinInviteOnlyDeniedWithoutInvite)
 {
 	TestClient op, member;
