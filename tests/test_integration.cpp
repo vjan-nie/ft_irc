@@ -2,6 +2,7 @@
 
 #include "PostMan.hpp"
 #include "TestHarness.hpp"
+#include "ext/IServerExtension.hpp"
 
 /* Fixture: server in a background thread (see TestHarness.hpp) */
 class IntegrationTest : public IrcServerTest
@@ -35,6 +36,31 @@ TEST_F(IntegrationTest, SuccessfulRegistration)
 	tc.sendCmd("QUIT");
 }
 
+/* T4: disconnectClient() now defers the physical close until the queued
+   reply drains via the existing EPOLLOUT path, so ERR_PASSWDMISMATCH
+   (464), queued by sendReply() right before disconnectClient() is called
+   in completeRegistration(), actually reaches the client before the
+   socket closes. This is the fire test for that mechanism: it fails
+   against pre-T4 code (0 bytes delivered, silent close) and passes once
+   the deferred-close path is in place. */
+TEST_F(IntegrationTest, PasswordMismatchReplyDeliveredBeforeClose)
+{
+	TestClient tc;
+	ASSERT_TRUE(tc.connect(serverPort));
+
+	tc.sendCmd("PASS wrongpass");
+	tc.sendCmd("NICK fireTest");
+	tc.sendCmd("USER fireTest 0 * :Test");
+
+	std::string reply = tc.recvAll();
+	EXPECT_TRUE(tc.hasNumeric(reply, "464"))
+		<< "Expected ERR_PASSWDMISMATCH to reach the client before close";
+
+	char buf[64];
+	ssize_t n = recv(tc.fd(), buf, sizeof(buf), 0);
+	EXPECT_EQ(n, 0) << "Expected the socket to close after 464 was delivered";
+}
+
 TEST_F(IntegrationTest, WrongPassword)
 {
 	TestClient tc;
@@ -43,20 +69,12 @@ TEST_F(IntegrationTest, WrongPassword)
 	tc.sendCmd("PASS wrongpass");
 	tc.sendCmd("NICK wrongpw");
 	tc.sendCmd("USER wrongpw 0 * :Test");
-	std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
-	/* T3 (Option A): disconnectClient() no longer drains _out before
-	   close(fd). sendReply(464) and disconnectClient() are called
-	   synchronously in the same path (completeRegistration) with no
-	   epoll_wait in between, so the 464 structurally never arrives.
-	   Deterministic contract: zero bytes delivered and the connection
-	   closed (EOF) -- recv() checked for n == 0 rather than recvAll(),
-	   which can't distinguish EOF from a timeout on a still-open socket. */
-	char buf[64];
-	ssize_t n = recv(tc.fd(), buf, sizeof(buf), 0);
-	EXPECT_EQ(n, 0)
-		<< "Expected connection closed with zero bytes delivered "
-		   "(464 is queued but never flushed before close)";
+	/* T4: the deferred-close mechanism flushes the queued 464 before
+	   closing the fd (see PasswordMismatchReplyDeliveredBeforeClose). */
+	std::string reply = tc.recvAll();
+	EXPECT_TRUE(tc.hasNumeric(reply, "464"))
+		<< "Expected ERR_PASSWDMISMATCH to reach the client before close";
 }
 
 TEST_F(IntegrationTest, NoPassword)
@@ -66,15 +84,12 @@ TEST_F(IntegrationTest, NoPassword)
 
 	tc.sendCmd("NICK nopw");
 	tc.sendCmd("USER nopw 0 * :Test");
-	std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
 	/* Same path as WrongPassword (!hasPassSent() hits the same branch in
-	   completeRegistration) -- same deterministic contract. */
-	char buf[64];
-	ssize_t n = recv(tc.fd(), buf, sizeof(buf), 0);
-	EXPECT_EQ(n, 0)
-		<< "Expected connection closed with zero bytes delivered "
-		   "(464 is queued but never flushed before close)";
+	   completeRegistration) -- same T4 contract. */
+	std::string reply = tc.recvAll();
+	EXPECT_TRUE(tc.hasNumeric(reply, "464"))
+		<< "Expected ERR_PASSWDMISMATCH to reach the client before close";
 }
 
 TEST_F(IntegrationTest, UnregisteredCommand)
@@ -817,4 +832,105 @@ TEST_F(IntegrationTest, BotViaPrivmsg)
 		<< "Should receive bot help response";
 
 	tc.sendCmd("QUIT");
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Suite: ServerIntegration — Deferred disconnect deadline (T4)
+ *
+ * A payload that fits in one send() drains almost instantly on loopback
+ * regardless of a shrunk receive window -- Linux's receive-buffer
+ * autotuning (net.ipv4.tcp_moderate_rcvbuf) reopens the window within a
+ * couple hundred milliseconds even against a peer that never calls recv(),
+ * so simulating a genuinely-stuck TCP peer via socket-buffer tuning is not
+ * reliable across machines (the same class of environment sensitivity the
+ * T6 frozen-reader tests already documented for buffer-size thresholds).
+ * Instead, this probe keeps _out topped up (just under MAX_SENDQ, refilled
+ * every tick) for as long as the client exists, so drain-complete can
+ * never be what closes the connection -- only checkPendingCloseTimeouts()
+ * can, once PENDING_CLOSE_TIMEOUT elapses. This tests the deadline itself
+ * as an unconditional ceiling, deterministically.
+ * ════════════════════════════════════════════════════════════════════ */
+
+/* Fires once a client registers: queues an initial payload just under
+   MAX_SENDQ and defers a disconnect on it, then keeps topping _out back up
+   every tick for as long as the client still exists, so it never drains to
+   empty on its own. Used only by DeferredCloseDeadlineTest. */
+struct DeadlineRefillProbe : public IServerExtension
+{
+	int targetFd;
+
+	DeadlineRefillProbe() : targetFd(-1) {}
+
+	const char *name() const override { return "deadline-refill-probe"; }
+
+	void onClientRegistered(Server &server, Client &client) override
+	{
+		targetFd = client.getFd();
+		server.sendToClient(&client, std::string(50000, 'A'));
+		server.disconnectClient(targetFd, "deadline test");
+	}
+
+	void onTick(Server &server, time_t) override
+	{
+		if (targetFd < 0)
+			return;
+		Client *client = server.findClientByFd(targetFd);
+		if (!client)
+		{
+			targetFd = -1; // finalized (by the deadline) -- stop refilling
+			return;
+		}
+		if (client->getSendBuffer().size() < 50000)
+			server.sendToClient(client, std::string(10000, 'B'));
+	}
+};
+
+class DeferredCloseDeadlineTest : public IrcServerTest
+{
+protected:
+	int portBase() const override { return 17150; }
+
+	void onServerReady(Server &server) override
+	{
+		server.addExtension(new DeadlineRefillProbe());
+	}
+};
+
+TEST_F(DeferredCloseDeadlineTest, FrozenPeerClosedByDeadlineNotDrain)
+{
+	TestClient tc;
+	ASSERT_TRUE(tc.connect(serverPort));
+
+	tc.sendCmd("PASS testpass");
+	tc.sendCmd("NICK deadline1");
+	tc.sendCmd("USER deadline1 0 * :Test");
+	/* Deliberately never read: this is the frozen-peer side of the test. */
+
+	std::this_thread::sleep_for(
+		std::chrono::seconds(PENDING_CLOSE_TIMEOUT + 3));
+
+	/* Even though this test never reads, some of the continuously-topped-
+	   up backlog may already have landed in the OS's own receive buffer
+	   over those seconds (nothing shrinks it here) -- so the first few
+	   recv() calls can legitimately return real, already-delivered bytes.
+	   Drain past that backlog first; only the terminal (n <= 0) result
+	   says anything about whether the connection itself is gone. The
+	   deadline finalize forces an abortive close (SO_LINGER 0) since it
+	   gave up on undrained backlog, so the peer can see either a clean
+	   EOF or ECONNRESET depending on timing -- both mean "gone". EAGAIN
+	   after draining everything buffered would mean the connection is
+	   still open, which is the failure this test guards against. */
+	char buf[4096];
+	ssize_t n;
+	int reads = 0;
+	do {
+		n = recv(tc.fd(), buf, sizeof(buf), MSG_DONTWAIT);
+	} while (n > 0 && ++reads < 100);
+
+	bool closed = (n == 0)
+		|| (n < 0 && (errno == ECONNRESET || errno == ENOTCONN));
+	EXPECT_TRUE(closed)
+		<< "Expected the frozen peer's connection to be force-closed by "
+		   "the pending-close deadline, not left open indefinitely "
+		   "(final recv returned " << n << ", errno=" << errno << ")";
 }

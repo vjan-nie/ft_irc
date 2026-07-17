@@ -81,8 +81,34 @@ Tests use Google Test but also feed every result into **PostMan** (`vendor/PostM
   reaps an RST is **timing-dependent** when `EPOLLIN` and `EPOLLHUP` arrive in
   the same event — do NOT assume `EPOLLERR|HUP` alone covered RST before that
   errno removal (`RobustnessTest.AbruptDisconnectViaRST` guards it now).
-- **No flush-on-disconnect**: `disconnectClient()` closes the fd without a
-  final best-effort `send()` of whatever is still queued in `_out` — two unpolled best-effort send()s were removed (T3): the flush in disconnectClient() and the MAX_CLIENTS "Server full" rejection in acceptClient(). The kernel now has no send() outside the EPOLLOUT-gated path in handleClientOutput(). Known accepted regressions: ERR_PASSWDMISMATCH (464) / the 001-005 burst on immediate post-registration QUIT, and the "Server full" ERROR when at MAX_CLIENTS, no longer reach the client (socket closes with zero bytes). Compliant recovery = deferred teardown (T4).
+- **Deferred disconnect (T4)**: `disconnectClient()` no longer closes the fd
+  synchronously. It runs `teardownClientState()` (QUIT to channel peers,
+  dedup'd by fd; leave channels; extension fan-out; log/audit) immediately,
+  then either finalizes right away if `_out` is already empty, or marks the
+  client `pendingClose` and lets the *existing* EPOLLOUT-gated
+  `handleClientOutput()` drain it — no new `send()` call site was added, the
+  T2/T3 rule (poll before every send) still holds. `updateEpollInterest()`
+  stops requesting `EPOLLIN` for a pending-close client (it's write-only
+  until it dies), and `handleClientInput()`'s per-message loop also checks
+  `isPendingClose()` so a client can't keep executing commands from the same
+  already-read batch after triggering its own deferred close. A
+  `PENDING_CLOSE_TIMEOUT` (`Replies.hpp`, 5s) safety net,
+  `checkPendingCloseTimeouts()`, force-closes a client whose `_out` never
+  drains (peer not reading) — unthrottled, every tick, keyed off its own
+  `_pendingCloseSince`, never `_lastActivity` (which stops updating once
+  `EPOLLIN` is stripped). That finalize forces an abortive close
+  (`SO_LINGER{1,0}`) since it's giving up on undrained backlog — a plain
+  `close()` there would leave the kernel trying to gracefully flush it
+  forever against a peer whose window never reopens. **Resolved**: 464
+  `ERR_PASSWDMISMATCH` and the 001-005 burst on immediate post-registration
+  QUIT now reach the client. **Excluded, immediate close via
+  `disconnectClientNow()`** (deferring would recreate the T6 frozen-reader
+  scenario or write to an already-errored socket): SendQ-exceeded (3 call
+  sites) and `EPOLLERR|EPOLLHUP`. **Still out of scope, still an accepted
+  regression**: the MAX_CLIENTS "Server full" rejection in `acceptClient()`
+  — that client is `close()`d before ever entering `_clients`, so the
+  mechanism (built on `_clients` + the reconcile sweep) structurally can't
+  reach it without separate work.
   - **SIGPIPE in the test harness**: `tests/` does NOT link `main.cpp`, so the
   `signal(SIGPIPE, SIG_IGN)` that `ircserv` installs never ran in
   `test_runner` — the test process had a different signal disposition than

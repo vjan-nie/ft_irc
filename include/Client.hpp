@@ -27,6 +27,8 @@ public:
 	bool				hasUser() const;
 	time_t				getLastActivity() const;
 	bool				isPingSent() const;
+	bool				isPendingClose() const;
+	time_t				getPendingCloseSince() const;
 	std::string			getPrefix() const;
 
 	/* ─── Setters ─── */
@@ -41,6 +43,7 @@ public:
 	void	setUserSet(bool set);
 	void	updateLastActivity();
 	void	setPingSent(bool sent);
+	void	markPendingClose();
 
 	/* ─── Buffer management ─── */
 	void						appendToRecvBuffer(const std::string &data);
@@ -73,6 +76,9 @@ private:
 
 	time_t		_lastActivity;
 	bool		_pingSent;
+
+	bool		_pendingClose;
+	time_t		_pendingCloseSince;
 };
 
 #endif

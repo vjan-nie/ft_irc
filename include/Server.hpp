@@ -74,8 +74,21 @@ private:
 	void	handleClientOutput(int fd);
 	void	handleMessage(Client *client, const std::string &raw);
 	void	checkTimeouts();
+	void	checkPendingCloseTimeouts();
 	void	updateEpollInterest(Client *client);
 	bool	dispatchExtensionFd(int fd, uint32_t events);
+
+	/* ─── Disconnect teardown ─── */
+	/* Logical goodbye (QUIT to peers, extension fan-out, log/audit) --
+	** shared by the deferred and immediate close paths so it never runs
+	** twice for the same client. */
+	void	teardownClientState(Client *client, const std::string &reason);
+	/* Immediate close: for cases where waiting to drain _out would be
+	** wrong (SendQ already exceeded, socket already errored). */
+	void	disconnectClientNow(int fd, const std::string &reason);
+	/* Physical close only -- no re-notification. Used once teardown has
+	** already run (drain completed, or the pending-close deadline hit). */
+	void	finalizeDisconnect(int fd);
 
 	/* ─── Command dispatch ─── */
 	void	dispatchCommand(Client *client, const Message &msg);

@@ -127,5 +127,11 @@
 # define MAX_CLIENTS		1024
 # define PING_INTERVAL		120
 # define PING_TIMEOUT		120
+/* Safety net for deferred disconnects: seconds a client marked
+** pending-close gets to drain its remaining _out before we give up on
+** the peer and close anyway. Deliberately much smaller than the ping
+** keepalive above -- this bounds teardown of a connection the server
+** already decided to end, not liveness of one still in use. */
+# define PENDING_CLOSE_TIMEOUT	5
 
 #endif
