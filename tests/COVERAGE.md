@@ -51,7 +51,7 @@ FancyLogSink, shrinking the surface an evaluator can question.
 | Sheet item | Status | Proven by | Notes / gap |
 |---|---|---|---|
 | Auth, NICK, USER, JOIN | ✅ | `Integration.SuccessfulRegistration/WrongPassword/NoPassword/JoinChannel` | |
-| PRIVMSG with different parameters | 🟡 | `Integration.PrivateMessage/ChannelMessage` | Add error cases: no such nick (401), no text (412), multi-target |
+| PRIVMSG with different parameters | ✅ | `Integration.PrivateMessage/ChannelMessage`; `Integration.PrivmsgNoRecipientGivesErrNorecipient/PrivmsgNoTextGivesErrNotextToSend/PrivmsgNoSuchNickGivesErrNosuchnick`; 404 via `Integration.JoinInviteOnlyDeniedWithoutInvite` | Happy path + 411/412/401/404 all covered. Multi-target (comma-separated targets, `ERR_TOOMANYTARGETS`) is **not implemented** — out of mandatory scope, not a gap |
 
 ---
 
@@ -118,5 +118,8 @@ FancyLogSink, shrinking the surface an evaluator can question.
    flaky, and guarding a property the architecture already enforces. No
    test_eventloop.cpp ever existed in history — this line previously implied a
    lost guard; it was never written.
-7. PRIVMSG error cases (D).
+7. ✅ **PRIVMSG error cases** (D) — 411/412/401 added; 404 was already covered by
+   `JoinInviteOnlyDeniedWithoutInvite`. Multi-target intentionally excluded:
+   `ERR_TOOMANYTARGETS` doesn't exist in the codebase, and comma-separated
+   targets are out of the mandatory subject's scope, not a missing test.
 8. **Manual reference-client (HexChat) checklist** (B/F) — the 🧭 items.

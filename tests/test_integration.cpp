@@ -166,6 +166,65 @@ TEST_F(IntegrationTest, PrivateMessage)
 	tc2.sendCmd("QUIT");
 }
 
+TEST_F(IntegrationTest, PrivmsgNoRecipientGivesErrNorecipient)
+{
+	TestClient tc;
+	ASSERT_TRUE(tc.connect(serverPort));
+	tc.registerClient("testpass", "norecip", "norecip");
+	tc.recvAll();
+
+	/* No target, no text at all (CommandMessaging.cpp:14-19) */
+	tc.sendCmd("PRIVMSG");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	std::string r = tc.recvAll();
+	if (!tc.hasNumeric(r, "411"))
+		r += tc.recvAll(200);
+	EXPECT_TRUE(tc.hasNumeric(r, "411"))
+		<< "PRIVMSG with no target and no text should be denied with ERR_NORECIPIENT";
+
+	tc.sendCmd("QUIT");
+}
+
+TEST_F(IntegrationTest, PrivmsgNoTextGivesErrNotextToSend)
+{
+	TestClient tc;
+	ASSERT_TRUE(tc.connect(serverPort));
+	tc.registerClient("testpass", "notext", "notext");
+	tc.recvAll();
+
+	/* Target deliberately unresolvable: the text check (params.size() < 2,
+	 * CommandMessaging.cpp:20-24) runs before findClientByNick, so a
+	 * nonexistent target still yields 412, not 401 — confirmed below. */
+	tc.sendCmd("PRIVMSG nosuchnick_412");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	std::string r = tc.recvAll();
+	if (!tc.hasNumeric(r, "412"))
+		r += tc.recvAll(200);
+	EXPECT_TRUE(tc.hasNumeric(r, "412"))
+		<< "PRIVMSG with a target but no text should be denied with ERR_NOTEXTTOSEND";
+	EXPECT_FALSE(tc.hasNumeric(r, "401"));
+
+	tc.sendCmd("QUIT");
+}
+
+TEST_F(IntegrationTest, PrivmsgNoSuchNickGivesErrNosuchnick)
+{
+	TestClient tc;
+	ASSERT_TRUE(tc.connect(serverPort));
+	tc.registerClient("testpass", "ghostsend", "ghostsend");
+	tc.recvAll();
+
+	tc.sendCmd("PRIVMSG ghost_nick_xyz :hola");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	std::string r = tc.recvAll();
+	if (!tc.hasNumeric(r, "401"))
+		r += tc.recvAll(200);
+	EXPECT_TRUE(tc.hasNumeric(r, "401"))
+		<< "PRIVMSG to a nonexistent nick should be denied with ERR_NOSUCHNICK";
+
+	tc.sendCmd("QUIT");
+}
+
 /* ════════════════════════════════════════════════════════════════════════
  * Suite: ServerIntegration — Operator commands
  * ════════════════════════════════════════════════════════════════════ */
