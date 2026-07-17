@@ -885,10 +885,27 @@ struct DeadlineRefillProbe : public IServerExtension
 	}
 };
 
+/* PENDING_CLOSE_TIMEOUT (5s) is the production default; this suite injects
+** a much shorter deadline via Server's constructor param so the test isn't
+** stuck paying a fixed multi-second sleep every run (was 8s: 5s deadline +
+** 3s test-side margin). Deliberately still expressed in whole deciseconds,
+** not shaved down to the millisecond: checkPendingCloseTimeouts() only
+** runs once per event-loop pass, so going much below the timescale on
+** which this loopback connection's receive window reopens (per the
+** autotuning note above -- a couple hundred ms) would just make the test
+** flaky against however fast one pass happens to be, not actually verify
+** the deadline logic any better. */
+static const double kTestPendingCloseTimeoutSec = 0.2;
+
 class DeferredCloseDeadlineTest : public IrcServerTest
 {
 protected:
 	int portBase() const override { return 17150; }
+
+	double pendingCloseTimeoutSec() const override
+	{
+		return kTestPendingCloseTimeoutSec;
+	}
 
 	void onServerReady(Server &server) override
 	{
@@ -906,29 +923,47 @@ TEST_F(DeferredCloseDeadlineTest, FrozenPeerClosedByDeadlineNotDrain)
 	tc.sendCmd("USER deadline1 0 * :Test");
 	/* Deliberately never read: this is the frozen-peer side of the test. */
 
-	std::this_thread::sleep_for(
-		std::chrono::seconds(PENDING_CLOSE_TIMEOUT + 3));
+	/* checkPendingCloseTimeouts() only runs once per event-loop pass, and
+	** the loop idles up to 1000ms between passes when nothing else is
+	** happening -- a constant orthogonal to PENDING_CLOSE_TIMEOUT itself.
+	** A second, healthy connection kept busy here gives the loop fd
+	** activity to wake on, so passes happen at roughly this poll's own
+	** cadence instead of that 1000ms idle ceiling, and the injected
+	** sub-second deadline can actually be observed promptly. Self-
+	** terminating (stops as soon as tc looks closed), capped so a missed
+	** detection fails fast rather than hanging. */
+	TestClient hb;
+	ASSERT_TRUE(hb.connect(serverPort));
+	hb.registerClient("testpass", "deadlinehb", "deadlinehb");
+	hb.recvAll();
 
-	/* Even though this test never reads, some of the continuously-topped-
-	   up backlog may already have landed in the OS's own receive buffer
-	   over those seconds (nothing shrinks it here) -- so the first few
-	   recv() calls can legitimately return real, already-delivered bytes.
-	   Drain past that backlog first; only the terminal (n <= 0) result
-	   says anything about whether the connection itself is gone. The
-	   deadline finalize forces an abortive close (SO_LINGER 0) since it
-	   gave up on undrained backlog, so the peer can see either a clean
-	   EOF or ECONNRESET depending on timing -- both mean "gone". EAGAIN
-	   after draining everything buffered would mean the connection is
-	   still open, which is the failure this test guards against. */
 	char buf[4096];
-	ssize_t n;
-	int reads = 0;
-	do {
-		n = recv(tc.fd(), buf, sizeof(buf), MSG_DONTWAIT);
-	} while (n > 0 && ++reads < 100);
+	ssize_t n = -1;
+	bool closed = false;
+	for (int poll = 0; poll < 100 && !closed; ++poll)
+	{
+		hb.sendCmd("PING :hb");
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-	bool closed = (n == 0)
-		|| (n < 0 && (errno == ECONNRESET || errno == ENOTCONN));
+		/* Even though this test never reads, some of the continuously-
+		   topped-up backlog may already have landed in the OS's own
+		   receive buffer (nothing shrinks it here) -- so the first few
+		   recv() calls can legitimately return real, already-delivered
+		   bytes. Drain past that backlog first; only the terminal
+		   (n <= 0) result says anything about whether the connection
+		   itself is gone. The deadline finalize forces an abortive close
+		   (SO_LINGER 0) since it gave up on undrained backlog, so the
+		   peer can see either a clean EOF or ECONNRESET depending on
+		   timing -- both mean "gone". EAGAIN after draining everything
+		   buffered means the connection is still open, i.e. keep polling. */
+		int reads = 0;
+		do {
+			n = recv(tc.fd(), buf, sizeof(buf), MSG_DONTWAIT);
+		} while (n > 0 && ++reads < 100);
+
+		closed = (n == 0) || (n < 0 && (errno == ECONNRESET || errno == ENOTCONN));
+	}
+
 	EXPECT_TRUE(closed)
 		<< "Expected the frozen peer's connection to be force-closed by "
 		   "the pending-close deadline, not left open indefinitely "

@@ -13,6 +13,7 @@
 
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -21,13 +22,15 @@
 
 bool Server::isRunning = true;
 
-Server::Server(int port, const std::string &password)
+Server::Server(int port, const std::string &password,
+			   double pendingCloseTimeoutSec)
 	: _port(port),
 	  _password(password),
 	  _serverName(SERVER_NAME),
 	  _listenFd(-1),
 	  _reactor(),
-	  _lastPingCheck(std::time(NULL))
+	  _lastPingCheck(std::time(NULL)),
+	  _pendingCloseTimeoutSec(pendingCloseTimeoutSec)
 {
 	createListenSocket();
 	createEpoll();
@@ -426,13 +429,16 @@ void Server::checkTimeouts()
 ** deadline based on it never elapse. */
 void Server::checkPendingCloseTimeouts()
 {
-	time_t now = std::time(NULL);
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	double now = static_cast<double>(tv.tv_sec)
+			   + static_cast<double>(tv.tv_usec) / 1e6;
 	std::vector<int> expired;
 	for (std::map<int, Client *>::iterator it = _clients.begin();
 		 it != _clients.end(); ++it)
 	{
 		if (it->second->isPendingClose()
-			&& now - it->second->getPendingCloseSince() >= PENDING_CLOSE_TIMEOUT)
+			&& now - it->second->getPendingCloseSince() >= _pendingCloseTimeoutSec)
 			expired.push_back(it->first);
 	}
 	for (size_t i = 0; i < expired.size(); ++i)
@@ -529,10 +535,19 @@ void Server::sendReply(Client *client, const std::string &numeric,
 
 /* Logical goodbye: QUIT to channel peers (deduped by fd), leave channels,
 ** notify extensions, log/audit. Runs exactly once per client regardless of
-** whether the physical close happens now or after draining -- callers
-** must not call this twice for the same client. */
+** whether the physical close happens now or after draining. Self-guarding:
+** marks the client as tearing down before doing anything else, so a
+** reentrant call for the same client -- e.g. an extension's
+** onClientDisconnect synchronously calling back into
+** disconnectClient()/disconnectClientNow() for its own fd from inside the
+** extension fan-out below -- is a no-op instead of a double QUIT broadcast,
+** double fan-out, or a delete of *client out from under this very loop. */
 void Server::teardownClientState(Client *client, const std::string &reason)
 {
+	if (client->isTearingDown())
+		return;
+	client->markTearingDown();
+
 	int fd = client->getFd();
 	std::string prefix = client->getPrefix();
 	std::string quitMsg = ":" + prefix + " QUIT :" + reason;
@@ -593,11 +608,17 @@ void Server::finalizeDisconnect(int fd)
 /* Deferred close (default path): the client's departure is announced and
 ** it leaves its channels right away (teardownClientState), but the fd
 ** itself only closes once _out drains via the existing EPOLLOUT-gated
-** handleClientOutput(), or PENDING_CLOSE_TIMEOUT elapses
+** handleClientOutput(), or _pendingCloseTimeoutSec elapses
 ** (checkPendingCloseTimeouts()) -- whichever comes first. This is what
 ** lets a reply queued right before disconnecting (e.g. 464 on password
 ** mismatch) actually reach the client instead of being discarded with the
-** socket still holding it. */
+** socket still holding it -- conditional on the client draining within
+** the deadline. The deadline doesn't distinguish a frozen peer (T6's
+** target) from one that's simply slow: a real client draining a large
+** reply over a congested link can legitimately still be mid-drain when
+** the deadline hits, and gets the same abortive close, losing whatever
+** of the reply hadn't gone out yet. Accepted trade-off, not a bug -- see
+** CLAUDE.md's Known traps entry. */
 void Server::disconnectClient(int fd, const std::string &reason)
 {
 	std::map<int, Client *>::iterator cit = _clients.find(fd);
@@ -605,8 +626,9 @@ void Server::disconnectClient(int fd, const std::string &reason)
 		return;
 
 	Client *client = cit->second;
-	if (client->isPendingClose())
-		return; // already tearing down; the drain or the deadline finishes it
+	if (client->isTearingDown())
+		return; // already tearing down (deferred drain, deadline, or a
+				// reentrant call from inside our own teardown) -- no-op
 
 	teardownClientState(client, reason);
 	if (!client->hasPendingData())
@@ -634,6 +656,10 @@ void Server::disconnectClientNow(int fd, const std::string &reason)
 		finalizeDisconnect(fd);
 		return;
 	}
+	if (client->isTearingDown())
+		return; // reentrant call from inside our own teardown fan-out --
+				// the outer, original call still owns finalizing this fd
+
 	teardownClientState(client, reason);
 	finalizeDisconnect(fd);
 }

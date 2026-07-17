@@ -1,6 +1,18 @@
 #include "Client.hpp"
 #include "Replies.hpp"
 #include <cstring>
+#include <sys/time.h>
+
+/* Sub-second wall-clock reading, used only for the pending-close deadline
+** (Server::_pendingCloseTimeoutSec) so it can be tuned below one second --
+** e.g. by tests -- without touching the second-resolution time_t used
+** everywhere else (last activity, ping keepalive). */
+static double nowSeconds()
+{
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return static_cast<double>(tv.tv_sec) + static_cast<double>(tv.tv_usec) / 1e6;
+}
 
 Client::Client(int fd, const std::string &hostname)
 	: _fd(fd),
@@ -15,7 +27,8 @@ Client::Client(int fd, const std::string &hostname)
 	  _lastActivity(std::time(NULL)),
 	  _pingSent(false),
 	  _pendingClose(false),
-	  _pendingCloseSince(0)
+	  _pendingCloseSince(0),
+	  _tearingDown(false)
 {
 }
 
@@ -37,7 +50,8 @@ bool				Client::hasUser() const { return _userSet; }
 time_t				Client::getLastActivity() const { return _lastActivity; }
 bool				Client::isPingSent() const { return _pingSent; }
 bool				Client::isPendingClose() const { return _pendingClose; }
-time_t				Client::getPendingCloseSince() const { return _pendingCloseSince; }
+double				Client::getPendingCloseSince() const { return _pendingCloseSince; }
+bool				Client::isTearingDown() const { return _tearingDown; }
 
 std::string Client::getPrefix() const
 {
@@ -61,7 +75,12 @@ void	Client::setPingSent(bool sent) { _pingSent = sent; }
 void Client::markPendingClose()
 {
 	_pendingClose = true;
-	_pendingCloseSince = std::time(NULL);
+	_pendingCloseSince = nowSeconds();
+}
+
+void Client::markTearingDown()
+{
+	_tearingDown = true;
 }
 
 /* ─── Buffer management ─── */

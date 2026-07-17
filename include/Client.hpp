@@ -28,7 +28,11 @@ public:
 	time_t				getLastActivity() const;
 	bool				isPingSent() const;
 	bool				isPendingClose() const;
-	time_t				getPendingCloseSince() const;
+	/* Seconds since the epoch, sub-second precision -- lets the
+	** pending-close deadline (Server::_pendingCloseTimeoutSec) be tuned
+	** below one second, e.g. by tests. */
+	double				getPendingCloseSince() const;
+	bool				isTearingDown() const;
 	std::string			getPrefix() const;
 
 	/* ─── Setters ─── */
@@ -44,6 +48,11 @@ public:
 	void	updateLastActivity();
 	void	setPingSent(bool sent);
 	void	markPendingClose();
+	/* Self-guarding latch: true from the first instant teardown starts
+	** (before the drain-vs-finalize decision is even made) so a callback
+	** re-entering disconnect logic for this same client mid-teardown can
+	** be recognized and turned into a no-op. See Server::teardownClientState. */
+	void	markTearingDown();
 
 	/* ─── Buffer management ─── */
 	void						appendToRecvBuffer(const std::string &data);
@@ -78,7 +87,8 @@ private:
 	bool		_pingSent;
 
 	bool		_pendingClose;
-	time_t		_pendingCloseSince;
+	double		_pendingCloseSince;
+	bool		_tearingDown;
 };
 
 #endif

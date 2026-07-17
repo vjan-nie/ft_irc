@@ -92,14 +92,24 @@ Tests use Google Test but also feed every result into **PostMan** (`vendor/PostM
   until it dies), and `handleClientInput()`'s per-message loop also checks
   `isPendingClose()` so a client can't keep executing commands from the same
   already-read batch after triggering its own deferred close. A
-  `PENDING_CLOSE_TIMEOUT` (`Replies.hpp`, 5s) safety net,
-  `checkPendingCloseTimeouts()`, force-closes a client whose `_out` never
-  drains (peer not reading) — unthrottled, every tick, keyed off its own
-  `_pendingCloseSince`, never `_lastActivity` (which stops updating once
-  `EPOLLIN` is stripped). That finalize forces an abortive close
+  `PENDING_CLOSE_TIMEOUT` (`Replies.hpp`, 5s production default; the value
+  actually used is `Server::_pendingCloseTimeoutSec`, an injectable ctor
+  param defaulted to the macro — tests pass a much smaller value so they
+  don't pay 5+ real seconds per run) safety net, `checkPendingCloseTimeouts()`,
+  force-closes a client whose `_out` never drains (peer not reading) —
+  unthrottled, every tick, keyed off its own `_pendingCloseSince` (now
+  sub-second precision, `gettimeofday`-based — needed once the deadline
+  itself could be sub-second), never `_lastActivity` (which stops updating
+  once `EPOLLIN` is stripped). That finalize forces an abortive close
   (`SO_LINGER{1,0}`) since it's giving up on undrained backlog — a plain
   `close()` there would leave the kernel trying to gracefully flush it
-  forever against a peer whose window never reopens. **Resolved**: 464
+  forever against a peer whose window never reopens. The deadline is a flat
+  ceiling, not a stuck-peer detector: it doesn't distinguish T6's frozen
+  reader from a real client that's simply slow (e.g. a large reply over a
+  congested link), so a legitimately-still-draining client gets the same
+  abortive close at the deadline, silently losing whatever hadn't gone out
+  yet. Accepted trade-off — the guarantee below is conditional on draining
+  within the deadline, not absolute. **Resolved**: 464
   `ERR_PASSWDMISMATCH` and the 001-005 burst on immediate post-registration
   QUIT now reach the client. **Excluded, immediate close via
   `disconnectClientNow()`** (deferring would recreate the T6 frozen-reader
@@ -109,6 +119,20 @@ Tests use Google Test but also feed every result into **PostMan** (`vendor/PostM
   — that client is `close()`d before ever entering `_clients`, so the
   mechanism (built on `_clients` + the reconcile sweep) structurally can't
   reach it without separate work.
+  - **Extension reentrancy during teardown**: `teardownClientState()` is
+  self-guarding (`Client::isTearingDown()`, marked as its first statement)
+  because its own extension fan-out (`onClientDisconnect`) can legally call
+  back into `disconnectClient()`/`disconnectClientNow()` for the *same* fd
+  synchronously. Without the guard that reentrant call would re-run the QUIT
+  broadcast and fan-out, and — for `disconnectClientNow()` specifically —
+  could `delete` the `Client*` while the outer call's own fan-out loop is
+  still mid-flight over it (use-after-free). Both `disconnectClient()` and
+  `disconnectClientNow()` check `isTearingDown()` before doing anything, so
+  the reentrant call is a no-op and only the original, outer call finalizes
+  the client. `IServerExtension::onClientDisconnect`'s doc comment warns
+  against relying on this. Covered by
+  `ReentrantDisconnectTest.ReentrantOnClientDisconnectIsNoOp`
+  (`test_extensions.cpp`).
   - **SIGPIPE in the test harness**: `tests/` does NOT link `main.cpp`, so the
   `signal(SIGPIPE, SIG_IGN)` that `ircserv` installs never ran in
   `test_runner` — the test process had a different signal disposition than
