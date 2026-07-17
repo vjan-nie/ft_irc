@@ -61,7 +61,8 @@ FancyLogSink, shrinking the surface an evaluator can question.
 |---|---|---|---|
 | Operator CAN: KICK / INVITE / TOPIC / MODE i,t,k,o,l | ✅ | `Integration.KickUser/InviteToChannel/TopicSetAndQuery/ChannelMode{Query,Key,Limit}`; `Channel.*Mode*`; `ModeBounds*` | Happy path well covered |
 | **Regular user is DENIED operator actions** | ✅ | `Integration.KickDeniedForNonOperator/ModeDeniedForNonOperator/TopicDeniedForNonOperatorWhenRestricted/TopicAllowedForNonOperatorWhenNotRestricted/InviteDeniedForNonOperatorWhenInviteOnly/InviteAllowedForNonOperatorWhenNotInviteOnly` | Negative tests assert `ERR_CHANOPRIVSNEEDED (482)` for non-op KICK/MODE/TOPIC(+t)/INVITE(+i); positive tests confirm TOPIC/INVITE still succeed for non-op when the channel isn't restricted |
-| +i / +t enforced end-to-end (uninvited JOIN blocked; non-op TOPIC blocked) | 🟡 | mode *state* tested at unit level | Enforcement path not asserted end-to-end via TCP |
+| +i enforced end-to-end (uninvited JOIN blocked) | ✅ | `Integration.JoinInviteOnlyDeniedWithoutInvite` (paired with `InviteToChannel` for the positive case) | Uninvited non-member gets ERR_INVITEONLYCHAN (473) on JOIN; ERR_CANNOTSENDTOCHAN (404) on PRIVMSG confirms non-membership |
+| +t enforced end-to-end (non-op TOPIC blocked) | ✅ | `Integration.TopicDeniedForNonOperatorWhenRestricted` | Non-op TOPIC after `MODE +t` gets ERR_CHANOPRIVSNEEDED (482) over TCP; row was stale, this enforcement was already proven |
 
 ---
 
@@ -117,5 +118,5 @@ FancyLogSink, shrinking the surface an evaluator can question.
    flaky, and guarding a property the architecture already enforces. No
    test_eventloop.cpp ever existed in history — this line previously implied a
    lost guard; it was never written.
-7. +i/+t end-to-end enforcement tests (E); PRIVMSG error cases (D).
+7. PRIVMSG error cases (D).
 8. **Manual reference-client (HexChat) checklist** (B/F) — the 🧭 items.

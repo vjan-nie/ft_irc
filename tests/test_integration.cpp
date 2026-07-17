@@ -482,6 +482,48 @@ TEST_F(IntegrationTest, InviteAllowedForNonOperatorWhenNotInviteOnly)
 	guest.sendCmd("QUIT");
 }
 
+TEST_F(IntegrationTest, JoinInviteOnlyDeniedWithoutInvite)
+{
+	TestClient op, member;
+	ASSERT_TRUE(op.connect(serverPort));
+	ASSERT_TRUE(member.connect(serverPort));
+
+	op.registerClient("testpass", "ijop", "ijop");
+	member.registerClient("testpass", "ijmem", "ijmem");
+	op.recvAll();
+	member.recvAll();
+
+	op.sendCmd("JOIN #ijoin");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+
+	op.sendCmd("MODE #ijoin +i");
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	op.recvAll();
+
+	/* member was never invited */
+	member.sendCmd("JOIN #ijoin");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	std::string mr = member.recvAll();
+	if (!member.hasNumeric(mr, "473"))
+		mr += member.recvAll(200);
+	EXPECT_TRUE(member.hasNumeric(mr, "473"))
+		<< "JOIN to an invite-only channel without an invite should be denied with ERR_INVITEONLYCHAN";
+
+	/* Positive proof of non-membership: a non-member can't send to the
+	 * channel either (404), confirming the JOIN was actually rejected. */
+	member.sendCmd("PRIVMSG #ijoin :test");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	std::string pr = member.recvAll();
+	if (!member.hasNumeric(pr, "404"))
+		pr += member.recvAll(200);
+	EXPECT_TRUE(member.hasNumeric(pr, "404"))
+		<< "Non-member must not be able to PRIVMSG the channel it was denied JOIN to";
+
+	op.sendCmd("QUIT");
+	member.sendCmd("QUIT");
+}
+
 /* ════════════════════════════════════════════════════════════════════════
  * Suite: ServerIntegration — Modes
  * ════════════════════════════════════════════════════════════════════ */
