@@ -129,3 +129,10 @@ Tests use Google Test but also feed every result into **PostMan** (`vendor/PostM
   the local scope before running the trap, so `kill -TERM "$vg_pid"` becomes a
   no-op and the child is orphaned. Keep PIDs meant for an EXIT trap
   script-scoped (like `vg_pid`/`SETUP_FAILURES` in `memcheck.sh`), never `local`.
+- **No idle-no-spin test, on purpose**: the EPOLLOUT-on-demand design (T1)
+  makes busy-looping structurally impossible — `epoll_wait` has a 1000ms
+  timeout and `_epollMask` only arms EPOLLOUT when `_out` is non-empty, so
+  there's no unconditional-rearm path to regress. The only external check
+  would be a CPU-usage assertion: flaky, threshold-arbitrary, rejected. Don't
+  add one; if you think idle-spin regressed, the bug would be in the
+  `_epollMask` sweep logic, testable directly — not via CPU sampling.

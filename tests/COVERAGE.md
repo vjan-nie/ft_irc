@@ -106,6 +106,16 @@ FancyLogSink, shrinking the surface an evaluator can question.
    sheet's scenarios under valgrind; keep the output as a defense artifact.
 
 **P2 — completeness / polish:**
-6. Re-land `test_eventloop.cpp` (idle no-spin) — merged fix, missing its guard.
+6. ✅ **Idle no-spin** — no test, by design. The busy-loop the EPOLLOUT-on-demand
+   fix (T1) prevents is structural, not a runtime check that could silently
+   regress: `epoll_wait` blocks with a 1000ms timeout (Server.cpp:158), so the
+   loop wakes at most once/sec when idle, and the `_epollMask` reconcile sweep
+   (Server.cpp:344-348) only ever arms EPOLLOUT while `_out` has queued data.
+   There is no code path that re-arms EPOLLOUT unconditionally to guard against.
+   A black-box CPU-usage test would be the only external way to assert "not
+   spinning", and it is deliberately rejected: machine/CI-dependent threshold,
+   flaky, and guarding a property the architecture already enforces. No
+   test_eventloop.cpp ever existed in history — this line previously implied a
+   lost guard; it was never written.
 7. +i/+t end-to-end enforcement tests (E); PRIVMSG error cases (D).
 8. **Manual reference-client (HexChat) checklist** (B/F) — the 🧭 items.
