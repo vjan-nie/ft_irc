@@ -3,6 +3,8 @@ NAME		= ircserv
 CXX			= c++
 CXXFLAGS	= -Wall -Wextra -Werror -std=c++98
 
+.NOTPARALLEL:
+
 SRCDIR		= src
 
 # ── Build tiers ────────────────────────────────────────────────────────────
@@ -88,6 +90,17 @@ bonus:
 mandatory:
 	@$(MAKE) --no-print-directory TIER=mandatory build
 
+# Verify all three tiers in STRICT SEQUENCE — never concurrently. The tier
+# marker (obj/.tier_$(TIER)) forces the needed relink between tiers, so no
+# fclean is required. This is the safe way to check -Werror across tiers:
+# one make invocation, serialized, each capped by MAKEFLAGS above. Building
+# tiers in parallel is what OOM-freezes machines; this makes it impossible.
+verify-tiers:
+	@$(MAKE) --no-print-directory mandatory
+	@$(MAKE) --no-print-directory bonus
+	@$(MAKE) --no-print-directory all
+	@echo "\n══════ All three tiers built sequentially (-Werror clean) ══════\n"
+
 build: $(NAME)
 
 # The marker forces a relink when switching tiers (one binary name, three
@@ -128,4 +141,4 @@ test:
 testclean:
 	@$(MAKE) -C tests fclean
 
-.PHONY: all bonus mandatory build clean fclean re test testclean
+.PHONY: all bonus mandatory build clean fclean re test testclean verify-tiers
