@@ -3,6 +3,8 @@
 #  Compiles with C++17 (required by Google Test 1.16.0)
 # ────────────────────────────────────────────────────────────────
 
+.NOTPARALLEL:
+
 NAME		= test_runner
 
 CXX			= c++
