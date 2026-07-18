@@ -28,10 +28,9 @@ public:
 	time_t				getLastActivity() const;
 	bool				isPingSent() const;
 	bool				isPendingClose() const;
-	/* Seconds since the epoch, sub-second precision -- lets the
-	** pending-close deadline (Server::_pendingCloseTimeoutSec) be tuned
-	** below one second, e.g. by tests. */
-	double				getPendingCloseSince() const;
+	/* Seconds since the epoch -- feeds the pending-close deadline
+	** (Server::_pendingCloseTimeoutSec). */
+	time_t				getPendingCloseSince() const;
 	bool				isTearingDown() const;
 	std::string			getPrefix() const;
 
@@ -87,7 +86,7 @@ private:
 	bool		_pingSent;
 
 	bool		_pendingClose;
-	double		_pendingCloseSince;
+	time_t		_pendingCloseSince;
 	bool		_tearingDown;
 };
 

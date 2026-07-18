@@ -888,21 +888,18 @@ struct DeadlineRefillProbe : public IServerExtension
 /* PENDING_CLOSE_TIMEOUT (5s) is the production default; this suite injects
 ** a much shorter deadline via Server's constructor param so the test isn't
 ** stuck paying a fixed multi-second sleep every run (was 8s: 5s deadline +
-** 3s test-side margin). Deliberately still expressed in whole deciseconds,
-** not shaved down to the millisecond: checkPendingCloseTimeouts() only
-** runs once per event-loop pass, so going much below the timescale on
-** which this loopback connection's receive window reopens (per the
-** autotuning note above -- a couple hundred ms) would just make the test
-** flaky against however fast one pass happens to be, not actually verify
-** the deadline logic any better. */
-static const double kTestPendingCloseTimeoutSec = 0.2;
+** 3s test-side margin). The deadline is a whole-second time_t (matching
+** _lastActivity and every other clock in Server/Client), so 1s is the
+** smallest deadline that still means anything -- there is no sub-second
+** granularity to shave it down to. */
+static const time_t kTestPendingCloseTimeoutSec = 1;
 
 class DeferredCloseDeadlineTest : public IrcServerTest
 {
 protected:
 	int portBase() const override { return 17150; }
 
-	double pendingCloseTimeoutSec() const override
+	time_t pendingCloseTimeoutSec() const override
 	{
 		return kTestPendingCloseTimeoutSec;
 	}
@@ -929,9 +926,9 @@ TEST_F(DeferredCloseDeadlineTest, FrozenPeerClosedByDeadlineNotDrain)
 	** A second, healthy connection kept busy here gives the loop fd
 	** activity to wake on, so passes happen at roughly this poll's own
 	** cadence instead of that 1000ms idle ceiling, and the injected
-	** sub-second deadline can actually be observed promptly. Self-
-	** terminating (stops as soon as tc looks closed), capped so a missed
-	** detection fails fast rather than hanging. */
+	** deadline can actually be observed promptly. Self-terminating (stops
+	** as soon as tc looks closed), capped so a missed detection fails
+	** fast rather than hanging. */
 	TestClient hb;
 	ASSERT_TRUE(hb.connect(serverPort));
 	hb.registerClient("testpass", "deadlinehb", "deadlinehb");
@@ -940,7 +937,7 @@ TEST_F(DeferredCloseDeadlineTest, FrozenPeerClosedByDeadlineNotDrain)
 	char buf[4096];
 	ssize_t n = -1;
 	bool closed = false;
-	for (int poll = 0; poll < 100 && !closed; ++poll)
+	for (int poll = 0; poll < 200 && !closed; ++poll)
 	{
 		hb.sendCmd("PING :hb");
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));

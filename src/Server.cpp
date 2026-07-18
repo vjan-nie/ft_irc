@@ -13,7 +13,6 @@
 
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -23,7 +22,7 @@
 bool Server::isRunning = true;
 
 Server::Server(int port, const std::string &password,
-			   double pendingCloseTimeoutSec)
+			   time_t pendingCloseTimeoutSec)
 	: _port(port),
 	  _password(password),
 	  _serverName(SERVER_NAME),
@@ -429,10 +428,7 @@ void Server::checkTimeouts()
 ** deadline based on it never elapse. */
 void Server::checkPendingCloseTimeouts()
 {
-	struct timeval tv;
-	gettimeofday(&tv, NULL);
-	double now = static_cast<double>(tv.tv_sec)
-			   + static_cast<double>(tv.tv_usec) / 1e6;
+	time_t now = std::time(NULL);
 	std::vector<int> expired;
 	for (std::map<int, Client *>::iterator it = _clients.begin();
 		 it != _clients.end(); ++it)

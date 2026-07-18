@@ -138,7 +138,7 @@ protected:
 	/* Override to shrink the pending-close deadline sweep below its 5s
 	** production default (Server's ctor takes it directly now) -- avoids
 	** paying real wall-clock seconds in tests that need to observe it. */
-	virtual double pendingCloseTimeoutSec() const { return PENDING_CLOSE_TIMEOUT; }
+	virtual time_t pendingCloseTimeoutSec() const { return PENDING_CLOSE_TIMEOUT; }
 
 	void SetUp() override
 	{

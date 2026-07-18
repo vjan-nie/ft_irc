@@ -22,7 +22,7 @@ public:
 	** sweep (checkPendingCloseTimeouts()) doesn't cost real wall-clock
 	** seconds per run. */
 	Server(int port, const std::string &password,
-		   double pendingCloseTimeoutSec = PENDING_CLOSE_TIMEOUT);
+		   time_t pendingCloseTimeoutSec = PENDING_CLOSE_TIMEOUT);
 	~Server();
 
 	void	run();
@@ -148,7 +148,7 @@ private:
 	std::map<std::string, Channel *>	_channels;
 	std::vector<IServerExtension *>	_extensions;
 	time_t						_lastPingCheck;
-	double						_pendingCloseTimeoutSec;
+	time_t						_pendingCloseTimeoutSec;
 
 	static const int			MAX_EVENTS = 64;
 };
