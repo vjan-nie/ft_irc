@@ -17,7 +17,12 @@ class IServerExtension;
 class Server
 {
 public:
-	Server(int port, const std::string &password);
+	/* pendingCloseTimeoutSec defaults to PENDING_CLOSE_TIMEOUT (the
+	** production value); tests can pass a smaller value so the deadline
+	** sweep (checkPendingCloseTimeouts()) doesn't cost real wall-clock
+	** seconds per run. */
+	Server(int port, const std::string &password,
+		   time_t pendingCloseTimeoutSec = PENDING_CLOSE_TIMEOUT);
 	~Server();
 
 	void	run();
@@ -74,8 +79,21 @@ private:
 	void	handleClientOutput(int fd);
 	void	handleMessage(Client *client, const std::string &raw);
 	void	checkTimeouts();
+	void	checkPendingCloseTimeouts();
 	void	updateEpollInterest(Client *client);
 	bool	dispatchExtensionFd(int fd, uint32_t events);
+
+	/* ─── Disconnect teardown ─── */
+	/* Logical goodbye (QUIT to peers, extension fan-out, log/audit) --
+	** shared by the deferred and immediate close paths so it never runs
+	** twice for the same client. */
+	void	teardownClientState(Client *client, const std::string &reason);
+	/* Immediate close: for cases where waiting to drain _out would be
+	** wrong (SendQ already exceeded, socket already errored). */
+	void	disconnectClientNow(int fd, const std::string &reason);
+	/* Physical close only -- no re-notification. Used once teardown has
+	** already run (drain completed, or the pending-close deadline hit). */
+	void	finalizeDisconnect(int fd);
 
 	/* ─── Command dispatch ─── */
 	void	dispatchCommand(Client *client, const Message &msg);
@@ -130,6 +148,7 @@ private:
 	std::map<std::string, Channel *>	_channels;
 	std::vector<IServerExtension *>	_extensions;
 	time_t						_lastPingCheck;
+	time_t						_pendingCloseTimeoutSec;
 
 	static const int			MAX_EVENTS = 64;
 };

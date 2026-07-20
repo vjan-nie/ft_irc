@@ -13,7 +13,10 @@ Client::Client(int fd, const std::string &hostname)
 	  _userSet(false),
 	  _io(MAX_MSGLEN, MAX_SENDQ),
 	  _lastActivity(std::time(NULL)),
-	  _pingSent(false)
+	  _pingSent(false),
+	  _pendingClose(false),
+	  _pendingCloseSince(0),
+	  _tearingDown(false)
 {
 }
 
@@ -34,6 +37,9 @@ bool				Client::hasNick() const { return _nickSet; }
 bool				Client::hasUser() const { return _userSet; }
 time_t				Client::getLastActivity() const { return _lastActivity; }
 bool				Client::isPingSent() const { return _pingSent; }
+bool				Client::isPendingClose() const { return _pendingClose; }
+time_t				Client::getPendingCloseSince() const { return _pendingCloseSince; }
+bool				Client::isTearingDown() const { return _tearingDown; }
 
 std::string Client::getPrefix() const
 {
@@ -53,6 +59,17 @@ void	Client::setNickSet(bool set) { _nickSet = set; }
 void	Client::setUserSet(bool set) { _userSet = set; }
 void	Client::updateLastActivity() { _lastActivity = std::time(NULL); }
 void	Client::setPingSent(bool sent) { _pingSent = sent; }
+
+void Client::markPendingClose()
+{
+	_pendingClose = true;
+	_pendingCloseSince = std::time(NULL);
+}
+
+void Client::markTearingDown()
+{
+	_tearingDown = true;
+}
 
 /* ─── Buffer management ─── */
 

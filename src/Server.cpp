@@ -21,13 +21,15 @@
 
 bool Server::isRunning = true;
 
-Server::Server(int port, const std::string &password)
+Server::Server(int port, const std::string &password,
+			   time_t pendingCloseTimeoutSec)
 	: _port(port),
 	  _password(password),
 	  _serverName(SERVER_NAME),
 	  _listenFd(-1),
 	  _reactor(),
-	  _lastPingCheck(std::time(NULL))
+	  _lastPingCheck(std::time(NULL)),
+	  _pendingCloseTimeoutSec(pendingCloseTimeoutSec)
 {
 	createListenSocket();
 	createEpoll();
@@ -179,7 +181,9 @@ void Server::run()
 				if ((ev & EPOLLOUT) && _clients.count(fd))
 					handleClientOutput(fd);
 				if ((ev & (EPOLLERR | EPOLLHUP)) && _clients.count(fd))
-					disconnectClient(fd, "Connection error");
+					// Immediate: the socket already signaled an error,
+					// draining into it would be futile at best.
+					disconnectClientNow(fd, "Connection error");
 			}
 			else if (!dispatchExtensionFd(fd, ev))
 			{
@@ -189,6 +193,7 @@ void Server::run()
 		}
 
 		checkTimeouts();
+		checkPendingCloseTimeouts();
 
 		time_t now = std::time(NULL);
 		for (size_t i = 0; i < _extensions.size(); ++i)
@@ -235,9 +240,12 @@ void Server::acceptClient()
 	// Connection cap: reject gracefully instead of exhausting fds
 	if (_clients.size() >= MAX_CLIENTS)
 	{
-	    /* Reject by closing only — no unpolled send() here either (T3, same rule
-	    ** as the removed disconnect flush). A courtesy "Server full" line would
-	    ** need the deferred-teardown machinery tracked as T4. */
+	    /* Reject by closing only. This does NOT go through the deferred-
+	    ** teardown mechanism (disconnectClient/finalizeDisconnect, T4): this
+	    ** client never enters _clients, so it's invisible to the reconcile
+	    ** sweep and checkPendingCloseTimeouts() that mechanism relies on.
+	    ** A courtesy "Server full" line here is out of scope for T4 and
+	    ** remains an accepted regression -- see CLAUDE.md. */
 	    close(clientFd);
 	    Log::warn("connection rejected: MAX_CLIENTS reached");
 	    return;
@@ -297,22 +305,28 @@ void Server::handleClientInput(int fd)
 	for (size_t i = 0; i < messages.size(); ++i)
 	{
 		handleMessage(client, messages[i]);
-		// Check if client was disconnected during handling
-		if (_clients.find(fd) == _clients.end())
+		// Check if the client was disconnected during handling, or just
+		// marked pending-close (e.g. QUIT deferred behind unflushed data)
+		// -- either way, stop feeding it more commands from this batch.
+		std::map<int, Client *>::iterator cit = _clients.find(fd);
+		if (cit == _clients.end() || cit->second->isPendingClose())
 			return;
 	}
 
-	// SendQ sweep: never disconnect mid-broadcast, only between events
+	// SendQ sweep: never disconnect mid-broadcast, only between events.
+	// Immediate: draining towards a peer that already blew SendQ would
+	// recreate the T6 frozen-reader scenario.
 	if (client->isSendQExceeded())
-		disconnectClient(fd, "SendQ exceeded");
+		disconnectClientNow(fd, "SendQ exceeded");
 }
 
 void Server::handleClientOutput(int fd)
 {
-	if (_clients.find(fd) == _clients.end())
+	std::map<int, Client *>::iterator it = _clients.find(fd);
+	if (it == _clients.end())
 		return;
 
-	Client *client = _clients[fd];
+	Client *client = it->second;
 	if (!client->hasPendingData())
 		return;
 
@@ -322,10 +336,22 @@ void Server::handleClientOutput(int fd)
 		return;
 	client->clearSendBuffer(bytesSent);
 
+	if (client->isPendingClose())
+	{
+		/* Draining a deferred close: finish once _out empties. If it
+		** blows SendQ mid-drain, don't linger waiting on a peer that
+		** isn't reading (T6) -- close now. teardownClientState() already
+		** ran when this client was marked, so no re-notification here. */
+		if (!client->hasPendingData() || client->isSendQExceeded())
+			finalizeDisconnect(fd);
+		return;
+	}
+
 	// SendQ sweep: the peer is too slow / flooded; its stream already
-	// lost messages, so terminate it cleanly.
+	// lost messages, so terminate it cleanly. Immediate for the same
+	// reason as above.
 	if (client->isSendQExceeded())
-		disconnectClient(fd, "SendQ exceeded");
+		disconnectClientNow(fd, "SendQ exceeded");
 }
 
 void Server::handleMessage(Client *client, const std::string &raw)
@@ -340,7 +366,10 @@ void Server::handleMessage(Client *client, const std::string &raw)
 void Server::updateEpollInterest(Client *client)
 {
 	int fd = client->getFd();
-	uint32_t want = EPOLLIN | (client->hasPendingData() ? EPOLLOUT : 0u);
+	/* A pending-close client is write-only: no more input is ever read
+	** for it, it's just draining towards finalizeDisconnect(). */
+	uint32_t want = (client->isPendingClose() ? 0u : EPOLLIN)
+				  | (client->hasPendingData() ? EPOLLOUT : 0u);
 	std::map<int, uint32_t>::iterator it = _epollMask.find(fd);
 	if (it != _epollMask.end() && it->second == want)
 		return;
@@ -355,20 +384,25 @@ void Server::checkTimeouts()
 		return;
 	_lastPingCheck = now;
 
-	std::vector<std::pair<int, const char *> > toDisconnect;
+	std::vector<int> sendQNow;
+	std::vector<int> pingTimeoutDeferred;
 	for (std::map<int, Client *>::iterator it = _clients.begin();
 		 it != _clients.end(); ++it)
 	{
 		Client *client = it->second;
+		/* Already tearing down -- its fate is decided (drain or
+		** checkPendingCloseTimeouts()), not re-evaluated here. */
+		if (client->isPendingClose())
+			continue;
 		time_t idle = now - client->getLastActivity();
 
 		if (client->isSendQExceeded())
 		{
-			toDisconnect.push_back(std::make_pair(it->first, "SendQ exceeded"));
+			sendQNow.push_back(it->first);
 		}
 		else if (client->isPingSent() && idle > PING_INTERVAL + PING_TIMEOUT)
 		{
-			toDisconnect.push_back(std::make_pair(it->first, "Ping timeout"));
+			pingTimeoutDeferred.push_back(it->first);
 		}
 		else if (!client->isPingSent() && idle > PING_INTERVAL)
 		{
@@ -376,8 +410,47 @@ void Server::checkTimeouts()
 			client->setPingSent(true);
 		}
 	}
-	for (size_t i = 0; i < toDisconnect.size(); ++i)
-		disconnectClient(toDisconnect[i].first, toDisconnect[i].second);
+	// Immediate: draining towards a peer that already blew SendQ would
+	// recreate the T6 frozen-reader scenario.
+	for (size_t i = 0; i < sendQNow.size(); ++i)
+		disconnectClientNow(sendQNow[i], "SendQ exceeded");
+	for (size_t i = 0; i < pingTimeoutDeferred.size(); ++i)
+		disconnectClient(pingTimeoutDeferred[i], "Ping timeout");
+}
+
+/* Safety net for the deferred-close path: a client marked pending-close
+** whose _out never drains (peer not reading) would otherwise sit in
+** _clients forever, since updateEpollInterest() stops requesting EPOLLIN
+** for it and a full send-buffer can mean EPOLLOUT never re-fires either.
+** Runs every tick, unthrottled (unlike checkTimeouts()'s 30s gate) and
+** off its own _pendingCloseSince timestamp, not _lastActivity -- the
+** latter stops updating once EPOLLIN is stripped, which would make a
+** deadline based on it never elapse. */
+void Server::checkPendingCloseTimeouts()
+{
+	time_t now = std::time(NULL);
+	std::vector<int> expired;
+	for (std::map<int, Client *>::iterator it = _clients.begin();
+		 it != _clients.end(); ++it)
+	{
+		if (it->second->isPendingClose()
+			&& now - it->second->getPendingCloseSince() >= _pendingCloseTimeoutSec)
+			expired.push_back(it->first);
+	}
+	for (size_t i = 0; i < expired.size(); ++i)
+	{
+		/* This peer never freed enough window to drain the backlog, so a
+		** plain close() would leave the kernel trying to gracefully
+		** flush it for an indeterminate time -- the whole point of the
+		** deadline is to stop waiting on this peer, so force an
+		** abortive close (RST, discard unsent data) instead of letting
+		** the OS keep trying on our behalf after we've already given up. */
+		struct linger lg;
+		lg.l_onoff = 1;
+		lg.l_linger = 0;
+		setsockopt(expired[i], SOL_SOCKET, SO_LINGER, &lg, sizeof(lg));
+		finalizeDisconnect(expired[i]);
+	}
 }
 
 /* ─── Command dispatch ─── */
@@ -456,23 +529,46 @@ void Server::sendReply(Client *client, const std::string &numeric,
 						 + client->getNickname() + " " + params);
 }
 
-void Server::disconnectClient(int fd, const std::string &reason)
+/* Logical goodbye: QUIT to channel peers (deduped by fd), leave channels,
+** notify extensions, log/audit. Runs exactly once per client regardless of
+** whether the physical close happens now or after draining. Self-guarding:
+** marks the client as tearing down before doing anything else, so a
+** reentrant call for the same client -- e.g. an extension's
+** onClientDisconnect synchronously calling back into
+** disconnectClient()/disconnectClientNow() for its own fd from inside the
+** extension fan-out below -- is a no-op instead of a double QUIT broadcast,
+** double fan-out, or a delete of *client out from under this very loop. */
+void Server::teardownClientState(Client *client, const std::string &reason)
 {
-	if (_clients.find(fd) == _clients.end())
+	if (client->isTearingDown())
 		return;
+	client->markTearingDown();
 
-	Client *client = _clients[fd];
+	int fd = client->getFd();
 	std::string prefix = client->getPrefix();
 	std::string quitMsg = ":" + prefix + " QUIT :" + reason;
 
-	// Broadcast QUIT to all channels the client is in, and remove them
+	// Broadcast QUIT to all channels the client is in, and remove them.
+	// Dedup by fd across channels (same pattern as broadcastToChannels)
+	// so a peer sharing N channels with the departing client gets the
+	// QUIT line queued once, not N times.
+	std::set<int> alreadySent;
+	alreadySent.insert(fd);
 	for (std::map<std::string, Channel *>::iterator it = _channels.begin();
 		 it != _channels.end();)
 	{
 		Channel *chan = it->second;
 		if (chan->isMember(client))
 		{
-			chan->broadcastMessage(quitMsg, client);
+			std::vector<Client *> members = chan->getMembers();
+			for (size_t i = 0; i < members.size(); ++i)
+			{
+				int mfd = members[i]->getFd();
+				if (alreadySent.count(mfd))
+					continue;
+				members[i]->queueMessage(quitMsg);
+				alreadySent.insert(mfd);
+			}
 			chan->removeMember(client);
 			if (chan->isEmpty())
 			{
@@ -487,14 +583,81 @@ void Server::disconnectClient(int fd, const std::string &reason)
 	for (size_t i = 0; i < _extensions.size(); ++i)
 		_extensions[i]->onClientDisconnect(*this, *client, reason);
 
-	_epollMask.erase(fd);
-	removeFromEpoll(fd);
-	close(fd);
 	Log::info("client disconnected: " + client->getNickname()
 			  + " (" + reason + ")");
 	audit("disconnect", client->getNickname(), reason);
-	delete client;
+}
+
+/* Physical close only: epoll/fd/heap teardown, no re-notification. Used
+** once teardownClientState() has already run for this client -- either
+** just now (immediate path) or earlier, at the moment it was marked
+** pending-close (deferred path, drain-complete or deadline). */
+void Server::finalizeDisconnect(int fd)
+{
+	_epollMask.erase(fd);
+	removeFromEpoll(fd);
+	close(fd);
+	delete _clients[fd];
 	_clients.erase(fd);
+}
+
+/* Deferred close (default path): the client's departure is announced and
+** it leaves its channels right away (teardownClientState), but the fd
+** itself only closes once _out drains via the existing EPOLLOUT-gated
+** handleClientOutput(), or _pendingCloseTimeoutSec elapses
+** (checkPendingCloseTimeouts()) -- whichever comes first. This is what
+** lets a reply queued right before disconnecting (e.g. 464 on password
+** mismatch) actually reach the client instead of being discarded with the
+** socket still holding it -- conditional on the client draining within
+** the deadline. The deadline doesn't distinguish a frozen peer (T6's
+** target) from one that's simply slow: a real client draining a large
+** reply over a congested link can legitimately still be mid-drain when
+** the deadline hits, and gets the same abortive close, losing whatever
+** of the reply hadn't gone out yet. Accepted trade-off, not a bug -- see
+** CLAUDE.md's Known traps entry. */
+void Server::disconnectClient(int fd, const std::string &reason)
+{
+	std::map<int, Client *>::iterator cit = _clients.find(fd);
+	if (cit == _clients.end())
+		return;
+
+	Client *client = cit->second;
+	if (client->isTearingDown())
+		return; // already tearing down (deferred drain, deadline, or a
+				// reentrant call from inside our own teardown) -- no-op
+
+	teardownClientState(client, reason);
+	if (!client->hasPendingData())
+	{
+		finalizeDisconnect(fd);
+		return;
+	}
+	client->markPendingClose();
+}
+
+/* Immediate close, bypassing the drain: for SendQ-exceeded and socket
+** errors, where waiting to flush _out would either write to an
+** already-errored socket or recreate the T6 frozen-reader scenario against
+** a peer that isn't consuming its backlog. */
+void Server::disconnectClientNow(int fd, const std::string &reason)
+{
+	std::map<int, Client *>::iterator cit = _clients.find(fd);
+	if (cit == _clients.end())
+		return;
+
+	Client *client = cit->second;
+	if (client->isPendingClose())
+	{
+		// Already announced at mark time; just stop draining and close.
+		finalizeDisconnect(fd);
+		return;
+	}
+	if (client->isTearingDown())
+		return; // reentrant call from inside our own teardown fan-out --
+				// the outer, original call still owns finalizing this fd
+
+	teardownClientState(client, reason);
+	finalizeDisconnect(fd);
 }
 
 /* ─── Channel management ─── */

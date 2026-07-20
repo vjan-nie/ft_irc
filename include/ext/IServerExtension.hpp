@@ -41,6 +41,11 @@ public:
 	/* ─── client lifecycle ─── */
 	virtual void	onClientRegistered(Server &server, Client &client)
 	{ (void)server; (void)client; }
+	/* Fired mid-teardown (QUIT already broadcast, channels already left).
+	** Safe to queue messages to other clients here; do NOT synchronously
+	** call disconnectClient()/disconnectClientNow() on `client`'s own fd --
+	** the kernel guards against the resulting reentrancy (it becomes a
+	** no-op), but relying on that guard is fragile and unintended. */
 	virtual void	onClientDisconnect(Server &server, Client &client,
 									   const std::string &reason)
 	{ (void)server; (void)client; (void)reason; }

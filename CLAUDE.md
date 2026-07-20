@@ -81,8 +81,61 @@ Tests use Google Test but also feed every result into **PostMan** (`vendor/PostM
   reaps an RST is **timing-dependent** when `EPOLLIN` and `EPOLLHUP` arrive in
   the same event — do NOT assume `EPOLLERR|HUP` alone covered RST before that
   errno removal (`RobustnessTest.AbruptDisconnectViaRST` guards it now).
-- **No flush-on-disconnect**: `disconnectClient()` closes the fd without a
-  final best-effort `send()` of whatever is still queued in `_out` — two unpolled best-effort send()s were removed (T3): the flush in disconnectClient() and the MAX_CLIENTS "Server full" rejection in acceptClient(). The kernel now has no send() outside the EPOLLOUT-gated path in handleClientOutput(). Known accepted regressions: ERR_PASSWDMISMATCH (464) / the 001-005 burst on immediate post-registration QUIT, and the "Server full" ERROR when at MAX_CLIENTS, no longer reach the client (socket closes with zero bytes). Compliant recovery = deferred teardown (T4).
+- **Deferred disconnect (T4)**: `disconnectClient()` no longer closes the fd
+  synchronously. It runs `teardownClientState()` (QUIT to channel peers,
+  dedup'd by fd; leave channels; extension fan-out; log/audit) immediately,
+  then either finalizes right away if `_out` is already empty, or marks the
+  client `pendingClose` and lets the *existing* EPOLLOUT-gated
+  `handleClientOutput()` drain it — no new `send()` call site was added, the
+  T2/T3 rule (poll before every send) still holds. `updateEpollInterest()`
+  stops requesting `EPOLLIN` for a pending-close client (it's write-only
+  until it dies), and `handleClientInput()`'s per-message loop also checks
+  `isPendingClose()` so a client can't keep executing commands from the same
+  already-read batch after triggering its own deferred close. A
+  `PENDING_CLOSE_TIMEOUT` (`Replies.hpp`, 5s production default; the value
+  actually used is `Server::_pendingCloseTimeoutSec`, an injectable ctor
+  param defaulted to the macro — tests pass a much smaller value so they
+  don't pay 5+ real seconds per run) safety net, `checkPendingCloseTimeouts()`,
+  force-closes a client whose `_out` never drains (peer not reading) —
+  unthrottled, every tick, keyed off its own `_pendingCloseSince` (a plain
+  `time_t`, set via `std::time(NULL)`, whole-second granularity like every
+  other clock in `Server`/`Client` — an earlier `gettimeofday`-based
+  sub-second version was reverted in `e9c0b0c` because `gettimeofday` is
+  neither C++98 nor on the subject's External Functions list), never
+  `_lastActivity` (which stops updating
+  once `EPOLLIN` is stripped). That finalize forces an abortive close
+  (`SO_LINGER{1,0}`) since it's giving up on undrained backlog — a plain
+  `close()` there would leave the kernel trying to gracefully flush it
+  forever against a peer whose window never reopens. The deadline is a flat
+  ceiling, not a stuck-peer detector: it doesn't distinguish T6's frozen
+  reader from a real client that's simply slow (e.g. a large reply over a
+  congested link), so a legitimately-still-draining client gets the same
+  abortive close at the deadline, silently losing whatever hadn't gone out
+  yet. Accepted trade-off — the guarantee below is conditional on draining
+  within the deadline, not absolute. **Resolved**: 464
+  `ERR_PASSWDMISMATCH` and the 001-005 burst on immediate post-registration
+  QUIT now reach the client. **Excluded, immediate close via
+  `disconnectClientNow()`** (deferring would recreate the T6 frozen-reader
+  scenario or write to an already-errored socket): SendQ-exceeded (3 call
+  sites) and `EPOLLERR|EPOLLHUP`. **Still out of scope, still an accepted
+  regression**: the MAX_CLIENTS "Server full" rejection in `acceptClient()`
+  — that client is `close()`d before ever entering `_clients`, so the
+  mechanism (built on `_clients` + the reconcile sweep) structurally can't
+  reach it without separate work.
+  - **Extension reentrancy during teardown**: `teardownClientState()` is
+  self-guarding (`Client::isTearingDown()`, marked as its first statement)
+  because its own extension fan-out (`onClientDisconnect`) can legally call
+  back into `disconnectClient()`/`disconnectClientNow()` for the *same* fd
+  synchronously. Without the guard that reentrant call would re-run the QUIT
+  broadcast and fan-out, and — for `disconnectClientNow()` specifically —
+  could `delete` the `Client*` while the outer call's own fan-out loop is
+  still mid-flight over it (use-after-free). Both `disconnectClient()` and
+  `disconnectClientNow()` check `isTearingDown()` before doing anything, so
+  the reentrant call is a no-op and only the original, outer call finalizes
+  the client. `IServerExtension::onClientDisconnect`'s doc comment warns
+  against relying on this. Covered by
+  `ReentrantDisconnectTest.ReentrantOnClientDisconnectIsNoOp`
+  (`test_extensions.cpp`).
   - **SIGPIPE in the test harness**: `tests/` does NOT link `main.cpp`, so the
   `signal(SIGPIPE, SIG_IGN)` that `ircserv` installs never ran in
   `test_runner` — the test process had a different signal disposition than
@@ -129,6 +182,17 @@ Tests use Google Test but also feed every result into **PostMan** (`vendor/PostM
   the local scope before running the trap, so `kill -TERM "$vg_pid"` becomes a
   no-op and the child is orphaned. Keep PIDs meant for an EXIT trap
   script-scoped (like `vg_pid`/`SETUP_FAILURES` in `memcheck.sh`), never `local`.
+- **`.NOTPARALLEL` build cap**: unbounded `make -j` (or running multiple
+  tier builds concurrently) peaks RAM high enough to swap-freeze
+  low-headroom machines — the measured cause of repeated build hangs,
+  fixed in `2113e0c`. The `Makefile` uses `.NOTPARALLEL:` rather than
+  forcing `-j1` via `MAKEFLAGS`, because the latter emits a jobserver
+  warning under the recursive tier builds (`verify-tiers` →
+  `mandatory`/`bonus`/`all`), and `scripts/audit.sh` greps the captured
+  build log for `warning:` and fails the audit on any hit — including a
+  benign jobserver warning unrelated to `-Wall -Wextra -Werror` compiler
+  output. Don't reintroduce `-j` in `MAKEFLAGS` to "speed up" builds
+  without re-checking this.
 - **No idle-no-spin test, on purpose**: the EPOLLOUT-on-demand design (T1)
   makes busy-looping structurally impossible — `epoll_wait` has a 1000ms
   timeout and `_epollMask` only arms EPOLLOUT when `_out` is non-empty, so

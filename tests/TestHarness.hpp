@@ -135,6 +135,10 @@ protected:
 	virtual int portBase() const { return 17100; }
 	/* Override to act on the server after construction, before run(). */
 	virtual void onServerReady(Server &server) { (void)server; }
+	/* Override to shrink the pending-close deadline sweep below its 5s
+	** production default (Server's ctor takes it directly now) -- avoids
+	** paying real wall-clock seconds in tests that need to observe it. */
+	virtual time_t pendingCloseTimeoutSec() const { return PENDING_CLOSE_TIMEOUT; }
 
 	void SetUp() override
 	{
@@ -145,7 +149,7 @@ protected:
 		{
 			try
 			{
-				server = new Server(port, "testpass");
+				server = new Server(port, "testpass", pendingCloseTimeoutSec());
 				serverPort = port;
 				break;
 			}
