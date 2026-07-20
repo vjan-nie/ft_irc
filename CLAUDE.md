@@ -97,9 +97,12 @@ Tests use Google Test but also feed every result into **PostMan** (`vendor/PostM
   param defaulted to the macro — tests pass a much smaller value so they
   don't pay 5+ real seconds per run) safety net, `checkPendingCloseTimeouts()`,
   force-closes a client whose `_out` never drains (peer not reading) —
-  unthrottled, every tick, keyed off its own `_pendingCloseSince` (now
-  sub-second precision, `gettimeofday`-based — needed once the deadline
-  itself could be sub-second), never `_lastActivity` (which stops updating
+  unthrottled, every tick, keyed off its own `_pendingCloseSince` (a plain
+  `time_t`, set via `std::time(NULL)`, whole-second granularity like every
+  other clock in `Server`/`Client` — an earlier `gettimeofday`-based
+  sub-second version was reverted in `e9c0b0c` because `gettimeofday` is
+  neither C++98 nor on the subject's External Functions list), never
+  `_lastActivity` (which stops updating
   once `EPOLLIN` is stripped). That finalize forces an abortive close
   (`SO_LINGER{1,0}`) since it's giving up on undrained backlog — a plain
   `close()` there would leave the kernel trying to gracefully flush it
@@ -179,6 +182,17 @@ Tests use Google Test but also feed every result into **PostMan** (`vendor/PostM
   the local scope before running the trap, so `kill -TERM "$vg_pid"` becomes a
   no-op and the child is orphaned. Keep PIDs meant for an EXIT trap
   script-scoped (like `vg_pid`/`SETUP_FAILURES` in `memcheck.sh`), never `local`.
+- **`.NOTPARALLEL` build cap**: unbounded `make -j` (or running multiple
+  tier builds concurrently) peaks RAM high enough to swap-freeze
+  low-headroom machines — the measured cause of repeated build hangs,
+  fixed in `2113e0c`. The `Makefile` uses `.NOTPARALLEL:` rather than
+  forcing `-j1` via `MAKEFLAGS`, because the latter emits a jobserver
+  warning under the recursive tier builds (`verify-tiers` →
+  `mandatory`/`bonus`/`all`), and `scripts/audit.sh` greps the captured
+  build log for `warning:` and fails the audit on any hit — including a
+  benign jobserver warning unrelated to `-Wall -Wextra -Werror` compiler
+  output. Don't reintroduce `-j` in `MAKEFLAGS` to "speed up" builds
+  without re-checking this.
 - **No idle-no-spin test, on purpose**: the EPOLLOUT-on-demand design (T1)
   makes busy-looping structurally impossible — `epoll_wait` has a 1000ms
   timeout and `_epollMask` only arms EPOLLOUT when `_out` is non-empty, so
