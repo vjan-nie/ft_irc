@@ -69,7 +69,7 @@ Dispatch enforces a **registration gate**: only CAP/PASS/NICK/USER/QUIT/PONG run
 
 ## Testing
 
-Tests use Google Test but also feed every result into **PostMan** (`vendor/PostMan.cpp`), a styled Unicode-table reporter — `tests/test_main.cpp` bridges the two via a custom `TestEventListener`. `tests/Makefile` builds all of `src/` *except* `main.cpp` (linking `tier_full.cpp` as the one `registerExtensions` definition). Protocol-level suites share `tests/TestHarness.hpp` (TCP `TestClient` + `IrcServerTest` fixture; subclass and override `portBase()` per suite, `onServerReady()` to inject probe extensions). Test files: `test_message`, `test_client`, `test_channel`, `test_bot`, `test_integration`, `test_robustness`, `test_security`, `test_filetransfer`, `test_extensions`, `test_libcpp98`. ~149 tests (see PostMan table); PostMan's leak counter is atomic and `assertNoLeaks` takes `const char*` (a `std::string` argument would count itself as a leak — keep it that way).
+Tests use Google Test but also feed every result into **PostMan** (`vendor/PostMan.cpp`), a styled Unicode-table reporter — `tests/test_main.cpp` bridges the two via a custom `TestEventListener`. `tests/Makefile` builds all of `src/` *except* `main.cpp` (linking `tier_full.cpp` as the one `registerExtensions` definition). Protocol-level suites share `tests/TestHarness.hpp` (TCP `TestClient` + `IrcServerTest` fixture; subclass and override `portBase()` per suite, `onServerReady()` to inject probe extensions). Test files: `test_message`, `test_client`, `test_channel`, `test_bot`, `test_integration`, `test_robustness`, `test_security`, `test_filetransfer`, `test_extensions`, `test_libcpp98`. ~155 product tests (reported as 456 PostMan assertions — 301 of those are PostManTruncationRegression's own self-checks, not IRC coverage); PostMan's leak counter is atomic and `assertNoLeaks` takes `const char*` (a `std::string` argument would count itself as a leak — keep it that way).
 
 ## Known traps
 
@@ -200,3 +200,4 @@ Tests use Google Test but also feed every result into **PostMan** (`vendor/PostM
   would be a CPU-usage assertion: flaky, threshold-arbitrary, rejected. Don't
   add one; if you think idle-spin regressed, the bug would be in the
   `_epollMask` sweep logic, testable directly — not via CPU sampling.
+- **Known conformance gaps (audited, not fixed)**: the 005 CHANMODES token classifies +l in the wrong group (it takes a param on set, so it belongs in group C, not D), and 004 RPL_MYINFO advertises 'o' as a user mode. Both are cosmetic — HexChat parses neither strictly — and were left as-is (see the A1 conformance audit). Don't "fix" them without checking the audit's rationale.

@@ -94,9 +94,7 @@ FancyLogSink, shrinking the surface an evaluator can question.
    (T3): the flush was removed, closing the last literal exception to
    "poll before every send" in the kernel. Accepted regression: 464 /
    welcome-burst no longer reach a client disconnected in the same tick
-   they were queued (see `CLAUDE.md` "Known traps"). Deferred-teardown
-   recovery (Option C) is tracked as future work (T4), out of this plan's
-   scope.
+   they were queued (see `CLAUDE.md` "Known traps"). Deferred-teardown recovery (Option C) — DONE (T4, merged): the 464 now reaches the client before close; "Server full" remains out of scope.
 
 **P1 — scored / high-value robustness:**
 3. ✅**Non-operator denial tests** (E) — the operator score is 0–5 and the sheet
