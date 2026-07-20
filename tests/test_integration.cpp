@@ -875,9 +875,14 @@ struct DeadlineRefillProbe : public IServerExtension
 		if (targetFd < 0)
 			return;
 		Client *client = server.findClientByFd(targetFd);
-		if (!client)
+		/* !client: finalized, fd fully gone (expected end state).
+		** !isPendingClose(): fd got reused by an unrelated, freshly-accepted
+		** connection before we noticed the finalize -- pendingClose is a
+		** state only our own disconnectClient() call above could have put
+		** the real target into, so a client lacking it can't be it. */
+		if (!client || !client->isPendingClose())
 		{
-			targetFd = -1; // finalized (by the deadline) -- stop refilling
+			targetFd = -1;
 			return;
 		}
 		if (client->getSendBuffer().size() < 50000)
@@ -915,54 +920,105 @@ TEST_F(DeferredCloseDeadlineTest, FrozenPeerClosedByDeadlineNotDrain)
 	TestClient tc;
 	ASSERT_TRUE(tc.connect(serverPort));
 
+	/* Shrink tc's own receive window well below MAX_SENDQ *before* it sends
+	** anything: on a loopback with a generous default tcp_rmem (seen here:
+	** 128 KiB, bigger than the 64 KiB MAX_SENDQ), the whole probe payload
+	** fits inside the receiver's initial window and the server can flush it
+	** in one send() -- drain-complete, not the deadline, closes the
+	** connection, regardless of payload size (nothing under MAX_SENDQ can
+	** outrun that). A real, deliberately undersized window forces the kind
+	** of backpressure a frozen reader is supposed to create, so the deadline
+	** path actually gets exercised. Set here, before PASS/NICK/USER, so the
+	** first ACKs the server sees already advertise the shrunk window. */
+	int rcvbuf = 4096;
+	setsockopt(tc.fd(), SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+
 	tc.sendCmd("PASS testpass");
 	tc.sendCmd("NICK deadline1");
 	tc.sendCmd("USER deadline1 0 * :Test");
 	/* Deliberately never read: this is the frozen-peer side of the test. */
 
-	/* checkPendingCloseTimeouts() only runs once per event-loop pass, and
-	** the loop idles up to 1000ms between passes when nothing else is
-	** happening -- a constant orthogonal to PENDING_CLOSE_TIMEOUT itself.
-	** A second, healthy connection kept busy here gives the loop fd
-	** activity to wake on, so passes happen at roughly this poll's own
-	** cadence instead of that 1000ms idle ceiling, and the injected
-	** deadline can actually be observed promptly. Self-terminating (stops
-	** as soon as tc looks closed), capped so a missed detection fails
-	** fast rather than hanging. */
-	TestClient hb;
-	ASSERT_TRUE(hb.connect(serverPort));
-	hb.registerClient("testpass", "deadlinehb", "deadlinehb");
-	hb.recvAll();
+	/* Registration above is what triggers the server-side markPendingClose()
+	** (synchronously, inside the probe's onClientRegistered) -- starting the
+	** clock here lets us tell a deadline-driven close (~kTestPendingCloseTimeoutSec
+	** later) apart from a drain-complete one (near-instant). */
+	std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 
 	char buf[4096];
 	ssize_t n = -1;
-	bool closed = false;
-	for (int poll = 0; poll < 200 && !closed; ++poll)
-	{
-		hb.sendCmd("PING :hb");
-		std::this_thread::sleep_for(std::chrono::milliseconds(20));
-
-		/* Even though this test never reads, some of the continuously-
-		   topped-up backlog may already have landed in the OS's own
-		   receive buffer (nothing shrinks it here) -- so the first few
-		   recv() calls can legitimately return real, already-delivered
-		   bytes. Drain past that backlog first; only the terminal
-		   (n <= 0) result says anything about whether the connection
-		   itself is gone. The deadline finalize forces an abortive close
-		   (SO_LINGER 0) since it gave up on undrained backlog, so the
-		   peer can see either a clean EOF or ECONNRESET depending on
-		   timing -- both mean "gone". EAGAIN after draining everything
-		   buffered means the connection is still open, i.e. keep polling. */
+	/* Even though this test never reads, some of the continuously-topped-up
+	   backlog may already have landed in the OS's own receive buffer
+	   (nothing shrinks it here) -- so the first few recv() calls can
+	   legitimately return real, already-delivered bytes. Drain past that
+	   backlog first; only the terminal (n <= 0) result says anything about
+	   whether the connection itself is gone. The deadline finalize forces
+	   an abortive close (SO_LINGER 0) since it gave up on undrained
+	   backlog, so the peer can see either a clean EOF or ECONNRESET
+	   depending on timing -- both mean "gone". EAGAIN after draining
+	   everything buffered means the connection is still open. */
+	auto checkClosed = [&]() -> bool {
 		int reads = 0;
 		do {
 			n = recv(tc.fd(), buf, sizeof(buf), MSG_DONTWAIT);
 		} while (n > 0 && ++reads < 100);
+		return (n == 0) || (n < 0 && (errno == ECONNRESET || errno == ENOTCONN));
+	};
 
-		closed = (n == 0) || (n < 0 && (errno == ECONNRESET || errno == ENOTCONN));
+	bool closed = checkClosed();
+	TestClient hb;
+	bool hbStarted = false;
+
+	/* checkPendingCloseTimeouts() only runs once per event-loop pass, and the
+	** loop idles up to 1000ms between passes when nothing else is happening
+	** -- a constant orthogonal to PENDING_CLOSE_TIMEOUT itself. hb is a
+	** second, healthy connection kept busy to give the loop fd activity to
+	** wake on, so passes happen at roughly this poll's own cadence instead
+	** of that 1000ms idle ceiling. It's only started after a short grace
+	** window (kGraceIterations) of plain polling with no hb traffic at all:
+	** starting it immediately would let its own connect/register round-trip
+	** (real wall-clock time) hide a near-instant drain-complete close inside
+	** that setup latency, landing inside the deadline window below for the
+	** wrong reason -- exactly the failure mode this test exists to catch
+	** (falsified in review round 2 by shrinking the probe's payload).
+	** Self-terminating (stops as soon as tc looks closed), capped so a
+	** missed detection fails fast rather than hanging. */
+	const int kGraceIterations = 15; // ~300ms at 20ms/iteration
+	for (int poll = 0; poll < 200 && !closed; ++poll)
+	{
+		if (!hbStarted && poll >= kGraceIterations)
+		{
+			ASSERT_TRUE(hb.connect(serverPort));
+			hb.registerClient("testpass", "deadlinehb", "deadlinehb");
+			hb.recvAll();
+			hbStarted = true;
+		}
+		if (hbStarted)
+			hb.sendCmd("PING :hb");
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		closed = checkClosed();
 	}
+
+	long long elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now() - start).count();
 
 	EXPECT_TRUE(closed)
 		<< "Expected the frozen peer's connection to be force-closed by "
 		   "the pending-close deadline, not left open indefinitely "
 		   "(final recv returned " << n << ", errno=" << errno << ")";
+
+	if (closed)
+	{
+		/* Pin the closure to the deadline itself, not just "eventually
+		** closed" -- a drain-complete close (or a broken deadline that
+		** happens to get cleaned up some other way) would land far outside
+		** this window. */
+		const long long kDeadlineMs = static_cast<long long>(kTestPendingCloseTimeoutSec) * 1000;
+		EXPECT_GE(elapsedMs, kDeadlineMs / 2)
+			<< "Closed too fast (" << elapsedMs << "ms) for a " << kDeadlineMs
+			<< "ms injected deadline -- looks like drain-completion, not "
+			   "the pending-close deadline sweep";
+		EXPECT_LE(elapsedMs, kDeadlineMs * 3)
+			<< "Closed suspiciously late (" << elapsedMs << "ms) for a "
+			<< kDeadlineMs << "ms injected deadline";
+	}
 }
